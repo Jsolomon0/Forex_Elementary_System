@@ -75,10 +75,10 @@ def run_trading_loop(state_manager):
             # Ref: Page 4 - Each stage can VETO (continue to next loop)
             
             # Mock data for testing
-            bar = data.get_mock_bar()
+            #bar = data.get_mock_bar()
 
             # LAYER 1: DATA INTEGRITY (Ref: Page 5)
-            #bar = data.get_processed_bar()
+            bar = data.get_processed_bar()
             if bar is None:
 
                 continue # Veto: Data invalid or connection lost
@@ -178,4 +178,5 @@ if __name__ == "__main__":
         try:
             run_trading_loop(sm)
         finally:
+
             shutdown_sequence(sm)
