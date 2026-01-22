@@ -1,0 +1,129 @@
+{'atr_p': 19, 'ema_f': 13, 'ema_s': 194, 'adx_p': 16, 'z_p': 23, 'atr_z_p': 18}
+{'atr_p': 20, 'ema_f': 13, 'ema_s': 187, 'adx_p': 20, 'z_p': 17, 'atr_z_p': 17}
+{'atr_p': 16, 'ema_f': 18, 'ema_s': 137, 'adx_p': 19, 'z_p': 18, 'atr_z_p': 6}
+{'atr_p': 19, 'ema_f': 14, 'ema_s': 81, 'adx_p': 10, 'z_p': 24, 'atr_z_p': 12}
+{'atr_p': 19, 'ema_f': 15, 'ema_s': 124, 'adx_p': 18, 'z_p': 18, 'atr_z_p': 19}
+
+Timeframe: 5M 
+Avoid extended candles: atr * 1.2
+=== BACKTEST PERFORMANCE REPORT ===
+--- OVERALL SUMMARY ---:
+Total Trades Executed: 172
+Final Account Balance: $798.82
+--- RETURNS ---     :
+Net Profit          : $-201.18
+Total Return        : -20.12%
+Annualized Return   : -75.08%
+--- RISK & DRAWDOWN ---:
+Max Drawdown        : -20.64%
+Sharpe Ratio        : -4.64
+Time under Water    : 1 trades
+--- TRADE STATS --- :
+Win Rate            : 27.91%
+Profit Factor       : 0.5
+Avg Win             : $4.22
+Avg Loss            : $-3.26
+Win/Loss Ratio      : 1.3
+
+Timeframe: 10M 
+Avoid extended candles: atr * 1.2
+=== BACKTEST PERFORMANCE REPORT ===
+--- OVERALL SUMMARY ---:
+Total Trades Executed: 89
+Final Account Balance: $918.48
+--- RETURNS ---     :
+Net Profit          : $-81.52
+Total Return        : -8.15%
+Annualized Return   : -40.91%
+--- RISK & DRAWDOWN ---:
+Max Drawdown        : -9.11%
+Sharpe Ratio        : -2.24
+Time under Water    : 8 trades
+--- TRADE STATS --- :
+Win Rate            : 30.34%
+Profit Factor       : 0.71
+Avg Win             : $7.30
+Avg Loss            : $-4.50
+Win/Loss Ratio      : 1.62
+
+Timeframe: 10M 
+Avoid extended candles: atr * 1.8
+=== BACKTEST PERFORMANCE REPORT ===
+--- OVERALL SUMMARY ---:
+Total Trades Executed: 117
+Final Account Balance: $860.10
+--- RETURNS ---     :
+Net Profit          : $-139.90
+Total Return        : -13.99%
+Annualized Return   : -60.64%
+--- RISK & DRAWDOWN ---:
+Max Drawdown        : -16.04%
+Sharpe Ratio        : -3.06
+Time under Water    : 8 trades
+--- TRADE STATS --- :
+Win Rate            : 29.06%
+Profit Factor       : 0.63
+Avg Win             : $7.11
+Avg Loss            : $-4.60
+Win/Loss Ratio      : 1.55
+
+Avoid extended candles: atr * 1.8
+=== BACKTEST PERFORMANCE REPORT ===
+--- OVERALL SUMMARY ---:
+Total Trades Executed: 11
+Final Account Balance: $794.19
+--- RETURNS ---     :
+Net Profit          : $-205.81
+Total Return        : -20.58%
+Annualized Return   : -10.88%
+--- RISK & DRAWDOWN ---:
+Max Drawdown        : -25.46%
+Sharpe Ratio        : -6.27
+Time under Water    : 1 trades
+--- TRADE STATS --- :
+Win Rate            : 18.18%
+Profit Factor       : 0.39
+Avg Win             : $67.18
+Avg Loss            : $-37.80
+Win/Loss Ratio      : 1.78
+
+
+Avoid extended candles: atr * 1.5
+=== BACKTEST PERFORMANCE REPORT ===
+--- OVERALL SUMMARY ---:
+Total Trades Executed: 9
+Final Account Balance: $749.06
+--- RETURNS ---     :
+Net Profit          : $-250.94
+Total Return        : -25.09%
+Annualized Return   : -13.45%
+--- RISK & DRAWDOWN ---:
+Max Drawdown        : -26.58%
+Sharpe Ratio        : -13.62
+Time under Water    : 0 trades
+--- TRADE STATS --- :
+Win Rate            : 11.11%
+Profit Factor       : 0.15
+Avg Win             : $44.85
+Avg Loss            : $-36.97
+Win/Loss Ratio      : 1.21
+
+Avoid extended candles: Disabled
+=== BACKTEST PERFORMANCE REPORT ===
+--- OVERALL SUMMARY ---:
+Total Trades Executed: 12
+Final Account Balance: $861.49
+--- RETURNS ---     :
+Net Profit          : $-138.51
+Total Return        : -13.85%
+Annualized Return   : -7.18%
+--- RISK & DRAWDOWN ---:
+Max Drawdown        : -25.00%
+Sharpe Ratio        : -3.18
+Time under Water    : 1 trades
+--- TRADE STATS --- :
+Win Rate            : 25.00%
+Profit Factor       : 0.59
+Avg Win             : $65.69
+Avg Loss            : $-37.29
+Win/Loss Ratio      : 1.76
