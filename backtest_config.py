@@ -7,8 +7,8 @@ from datetime import datetime
 
 # --- SIMULATION WINDOW ---
 # Ref: Page 59
-BT_START_DATE = datetime(2026, 1, 4)
-BT_END_DATE = datetime(2026, 1, 10)
+BT_START_DATE = datetime(2025, 12, 1)
+BT_END_DATE = datetime(2026, 1, 1)
 BT_INITIAL_BALANCE = 1000.00      # Ref: Page 60 (More Comfortable Capital)
 
 # --- VIRTUAL BROKER SETTINGS (FRICTION) ---
@@ -41,4 +41,5 @@ TARGETS = {
 
 # --- ANALYTICS SETTINGS ---
 RISK_FREE_RATE = 0.0              # Typically 0 for retail FX backtesting
+
 ANNUALIZATION_FACTOR = 252        # Standard trading days per year
