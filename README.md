@@ -1,4 +1,4 @@
-# Forex_System0_Backtest
+# Forex_System
 Deterministic FX backtesting toolkit built around the production decision pipeline. This repository focuses on realistic execution mechanics (spread, slippage, commission), regime-aware filtering, and robustness tooling (walk-forward, Monte Carlo).
 
 ## What This Is
