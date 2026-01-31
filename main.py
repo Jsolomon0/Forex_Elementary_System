@@ -6,13 +6,16 @@ Ref: Pages 4, 14, 23, 24
 
 import time
 import logging
+import math
 import MetaTrader5 as mt5
 from datetime import datetime
 
 # Import Custom Modules
 import config
+import calibration
+import back_test
 from state import StateManager
-import data, regime, strategy, psychology, costs, risk, execution, monitoring, broker
+import data, regime, strategy, psychology, costs, risk, execution, monitoring, broker, session
 
 #C:\Users\JOHN ALYN\QFSA0\Forex_System0\config.py
 
@@ -55,6 +58,13 @@ def shutdown_sequence(state_manager):
 
 def veto_reset():
     time.sleep(60)
+
+def _apply_risk_multiplier(lot_size, multiplier):
+    if multiplier >= 1.0:
+        return lot_size
+    scaled = lot_size * max(multiplier, 0.0)
+    scaled = math.floor(scaled / 0.01) * 0.01
+    return scaled if scaled >= 0.01 else 0.0
 
 def run_trading_loop(state_manager):
     """Ref: Page 14 - Complete Trade Lifecycle Loop"""
@@ -123,9 +133,13 @@ def run_trading_loop(state_manager):
             if not psychology.is_allowed(state_manager.state, bar):
                 continue # Veto: Daily limit or cooldown active
 
+            # LAYER 4.5: SESSION FILTER (UTC)
+            if not session.is_allowed(bar.get("timestamp")):
+                continue
+
             # LAYER 5: COST MANAGEMENT (Ref: Page 7)
             print("Cost Management Check Starting...")
-            if not costs.is_acceptable(bar['spread']):
+            if not costs.is_acceptable(bar['spread'], bar.get("timestamp")):
                 continue # Veto: Spread/Friction too high
 
             # LAYER 6: RISK MANAGEMENT (Ref: Page 7)
@@ -135,6 +149,10 @@ def run_trading_loop(state_manager):
                 stop_distance_pips=signal['stop_distance'],
                 current_price=bar['close']
             )
+            risk_mult = signal.get("risk_multiplier", context.get("risk_multiplier", 1.0))
+            if risk_mult <= 0:
+                continue
+            lot_size = _apply_risk_multiplier(lot_size, risk_mult)
             if lot_size <= 0:
                 print("Lot size calculated as zero or negative.")
                 continue # Veto: Risk/Leverage violation or size too small
@@ -173,6 +191,18 @@ def run_trading_loop(state_manager):
         #time.sleep(config.LOOP_DELAY_SECONDS)
 
 if __name__ == "__main__":
+    # 0. Pre-flight: calibration + backtest
+    try:
+        calibration.run_default_calibration()
+    except Exception as e:
+        logging.exception(f"Calibration failed: {e}")
+
+    try:
+        back_test.run_simulation(verbose=False)
+    except Exception as e:
+        logging.exception(f"Backtest failed: {e}")
+
+    # 1. Live trading
     sm = initialize_system()
     if sm:
         try:

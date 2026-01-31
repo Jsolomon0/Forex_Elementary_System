@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, time
 from config import MEDIAN_SPREAD_PRICE, MAX_SPREAD_MULTIPLIER, EXPECTED_SLIPPAGE_PIPS
 
-def is_acceptable(current_spread_price):
+def is_acceptable(current_spread_price, timestamp_utc=None):
     """
     Ref: Page 17 - Phase 6: Cost Evaluation
     Evaluates three layers of cost protection.
@@ -29,7 +29,7 @@ def is_acceptable(current_spread_price):
     # --- CHECK 2: Rollover Filter (Time Windows) ---
     # Ref: Page 34 - "Swap charges applied, wide spreads, unpredictable fills"
     # Blocks trading during the 21:59 - 22:05 UTC rollover window.
-    if is_in_rollover():
+    if is_in_rollover(timestamp_utc):
         logging.info("Cost Veto: Inside Rollover Window (21:59 - 22:05 UTC).")
         return False
 
@@ -51,12 +51,17 @@ def is_acceptable(current_spread_price):
     # ALL PASS -> CONTINUE
     return True
 
-def is_in_rollover():
+def is_in_rollover(timestamp_utc=None):
     """
     Checks if current UTC time is within the dangerous rollover window.
     Ref: Page 14 & 34
     """
-    now_utc = datetime.utcnow().time()
+    if timestamp_utc is None:
+        now_utc = datetime.utcnow().time()
+    else:
+        if isinstance(timestamp_utc, (int, float)):
+            timestamp_utc = datetime.utcfromtimestamp(timestamp_utc)
+        now_utc = timestamp_utc.time()
     start = time(21, 59)
     end = time(22, 5)
     
@@ -77,7 +82,7 @@ def get_cost_logic_insight():
 
 #______________________________________________
 
-def simulate_acceptable(current_spread_price, med_spread, max_spread_mult, expected_slippage_pips):
+def simulate_acceptable(current_spread_price, med_spread, max_spread_mult, expected_slippage_pips, timestamp_utc=None):
     """
     Ref: Page 17 - Phase 6: Cost Evaluation
     Evaluates three layers of cost protection.
@@ -98,7 +103,7 @@ def simulate_acceptable(current_spread_price, med_spread, max_spread_mult, expec
     # --- CHECK 2: Rollover Filter (Time Windows) ---
     # Ref: Page 34 - "Swap charges applied, wide spreads, unpredictable fills"
     # Blocks trading during the 21:59 - 22:05 UTC rollover window.
-    if is_in_rollover():
+    if is_in_rollover(timestamp_utc):
         logging.info("Cost Veto: Inside Rollover Window (21:59 - 22:05 UTC).")
         return False
 

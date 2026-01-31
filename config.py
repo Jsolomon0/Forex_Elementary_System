@@ -24,8 +24,9 @@ EXPECTED_SLIPPAGE_PIPS = 2.0     # Baseline slippage expectation for cost calc
 
 # --- REGIME DETECTION (MARKET CONTEXT) ---
 # Ref: Page 24-25
-VOL_Z_COMPRESSION = -1.0         # Z-score below this = market too quiet
-VOL_Z_EXPANSION = 1.0            # Z-score above this = market expanding
+VOL_Z_COMPRESSION = -1.0
+VOL_Z_EXPANSION = 1.0
+VOL_Z_EXTREME = 2.0  # new for extreme expansion
 ADX_TREND_THRESHOLD = 25         # Level above which market is "trending"
 
 # --- STRATEGY PARAMETERS ---

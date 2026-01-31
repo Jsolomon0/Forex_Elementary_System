@@ -1,0 +1,2976 @@
+﻿🤖 Professional FX Algorithmic Trading System
+Complete Technical Documentation
+________________
+
+
+📋 Table of Contents
+1. Executive Overview
+2. System Architecture
+3. Features & Capabilities
+4. Workflow & Logic
+5. File Structure & Responsibilities
+6. Technical Implementation
+7. User Experience & Safety
+8. Deployment & Operations
+9. Performance & Outcomes
+________________
+
+CURRENT IMPLEMENTATION NOTES (2026-01-31)
+This repository now includes a conservative, mechanics-focused backtest and a live loop that shares the same gating logic. Key updates:
+- Backtest uses 2-minute bars (MT5 TIMEFRAME_M2); live uses 1-minute bars.
+- Regime now returns strategy_bias + risk_multiplier and the system respects both.
+- Session filter blocks UTC hours 3, 5, 10, 11, 12 (session.py).
+- Microstructure scaling adjusts spread/slippage by session + volatility (microstructure.py).
+- Breakeven move is active in backtests (BE_TRIGGER_R_MULT, BE_OFFSET_PIPS).
+- Swap costs can be modeled for multi-day holds (SWAP_LONG_PER_LOT, SWAP_SHORT_PER_LOT).
+- Main loop runs calibration then a backtest before live trading (main.py).
+
+CURRENT REPO LAYOUT (2026-01-31)
+- back_test.py: deterministic simulator + report
+- backtest_config.py: backtest params (risk, execution, microstructure, session)
+- calibration.py: MT5 history calibration for spread/slippage
+- walk_forward.py: rolling window backtests
+- monte_carlo.py: resampled equity robustness
+- risk_validation.py: realized R vs configured risk
+- regime.py: volatility + structure classification with strategy_bias/risk_multiplier
+- session.py: UTC time-of-day gate
+- microstructure.py: session + volatility multipliers for spread/slippage
+- costs.py: spread/slippage filters + rollover checks
+- risk.py: size calculation with price-distance stops converted to pips
+
+
+<a name="executive-overview"></a>
+1. 📊 Executive Overview
+What Is This System?
+A production-grade automated forex trading system designed for retail traders with small accounts ($100+) trading on 1-minute timeframes. The system executes algorithmic trading strategies on the EURUSD currency pair through MetaTrader 5, with institutional-level risk management and safety mechanisms.
+Core Value Proposition
+┌─────────────────────────────────────────────────────────────┐
+│  PROBLEM: Retail traders with small accounts struggle to:   │
+│  • Maintain discipline during live trading                  │
+│  • Manage risk consistently                                 │
+│  • Execute strategies without emotional interference        │
+│  • Survive inevitable drawdown periods                      │
+│  • Scale from small to large capital                        │
+└─────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────┐
+│  SOLUTION: Automated trading system that:                   │
+│  ✓ Executes strategies with zero emotion                    │
+│  ✓ Enforces strict risk management rules                    │
+│  ✓ Protects capital through multiple safety layers          │
+│  ✓ Adapts position sizing to market volatility              │
+│  ✓ Maintains detailed logs for analysis                     │
+└─────────────────────────────────────────────────────────────┘
+
+
+________________
+
+
+Why This Architecture?
+The Three Pillars
+┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+│  SURVIVAL    │    │  DISCIPLINE  │    │  SCALABILITY │
+│              │    │              │    │              │
+│ • Fail-closed│    │ • No revenge │    │ • Modular    │
+│ • Multi-layer│    │   trading    │    │   design     │
+│   safety     │    │ • Consistent │    │ • Easy to    │
+│ • Capital    │    │   execution  │    │   extend     │
+│   protection │    │ • Auditable  │    │ • Framework  │
+└──────────────┘    └──────────────┘    └──────────────┘
+
+
+Design Philosophy:
+1. Survival beats optimization - A system that survives can be improved; a blown account cannot
+2. Discipline is systematic - Behavioral constraints enforced by code, not willpower
+3. Transparency enables trust - Every decision is logged and auditable
+________________
+
+
+Who Is This For?
+Primary Users
+┌────────────────────────────────────────────────────────┐
+│ 🎯 TARGET USER PROFILES                                │
+├────────────────────────────────────────────────────────┤
+│                                                        │
+│ 1. SYSTEMATIC RETAIL TRADERS                           │
+│    • Capital: $100 - $10,000                           │
+│    • Experience: Intermediate to advanced              │
+│    • Goal: Consistent, mechanical execution            │
+│    • Pain point: Emotional trading interference        │
+│                                                        │
+│ 2. PYTHON DEVELOPERS LEARNING ALGO TRADING             │
+│    • Capital: $100 - $1,000 (demo trading)             │
+│    • Experience: Strong programming, new to finance    │
+│    • Goal: Learn professional trading system design    │
+│    • Pain point: Don't know where to start             │
+│                                                        │
+│ 3. PROP FIRM ASPIRANTS                                 │
+│    • Capital: Demo accounts                            │
+│    • Experience: Seeking funded trading accounts       │
+│    • Goal: Pass prop firm challenges systematically    │
+│    • Pain point: Inconsistent risk management          │
+│                                                        │
+└────────────────────────────────────────────────────────┘
+
+
+What They Need vs. What They Get
+User Need
+	System Solution
+	"I overtrade when I'm winning"
+	Max trades/day + cooldown periods
+	"I chase losses with bigger sizes"
+	Fixed risk % per trade
+	"I don't know when NOT to trade"
+	Multi-regime market filtering
+	"I can't backtest my discipline"
+	Deterministic, reproducible logic
+	"My system breaks during high volatility"
+	Dynamic volatility-based sizing
+	________________
+
+
+<a name="system-architecture"></a>
+2. 🏗️ System Architecture
+High-Level Architecture
+┌───────────────────────────────────────────────────────────────┐
+│                     MAIN.PY (Orchestrator)                     │
+│                                                                │
+│  ┌──────────────────────────────────────────────────────┐    │
+│  │            60-Second Event Loop                       │    │
+│  └──────────────────────────────────────────────────────┘    │
+└────────┬──────────────────────────────────────────────────────┘
+         │
+         ↓
+┌────────────────────────────────────────────────────────────────┐
+│                    DECISION PIPELINE                            │
+│  (Each stage can VETO - no stage can override previous veto)   │
+└────────────────────────────────────────────────────────────────┘
+         │
+         ├─→ 1. DATA LAYER (data.py + indicators.py)
+         │   └─→ Valid? → Continue : STOP
+         │
+         ├─→ 2. CONTEXT LAYER (regime.py)
+         │   └─→ Tradable regime? → Continue : STOP
+         │
+         ├─→ 3. SIGNAL LAYER (strategy.py)
+         │   └─→ Setup present? → Continue : STOP
+         │
+         ├─→ 4. BEHAVIORAL LAYER (psychology.py)
+         │   └─→ Allowed to trade? → Continue : STOP
+         │
+         ├─→ 5. COST LAYER (costs.py)
+         │   └─→ Costs acceptable? → Continue : STOP
+         │
+         ├─→ 6. RISK LAYER (risk.py)
+         │   └─→ Position size > 0? → Continue : STOP
+         │
+         ├─→ 7. EXECUTION LAYER (execution.py)
+         │   └─→ Order filled? → Success : STOP
+         │
+         └─→ 8. MONITORING LAYER (monitoring.py)
+             └─→ System healthy? → Loop : DISABLE
+
+
+Architectural Pattern: Hierarchical Veto Architecture
+Key Principle
+"A trade must pass ALL layers. ANY layer can say NO. NO layer can override a previous NO."
+This creates a fail-closed system where uncertainty → no trade, protecting capital from edge cases and unknown states.
+________________
+
+
+System Layers Explained
+Layer 1: Data Integrity
+┌─────────────────────────────────────────────────────┐
+│ DATA.PY + INDICATORS.PY                             │
+├─────────────────────────────────────────────────────┤
+│ Purpose: Ensure market data is valid and complete   │
+│                                                     │
+│ Responsibilities:                                   │
+│ • Fetch closed 1-minute bars (no lookahead)        │
+│ • Calculate technical indicators (ATR, EMA, etc.)  │
+│ • Validate data integrity                          │
+│ • Provide monotonic bar indexing                   │
+│                                                     │
+│ Fail Conditions:                                    │
+│ • MT5 connection lost                              │
+│ • Invalid OHLC data                                │
+│ • Spread = 0 or negative                           │
+│ • Insufficient history for indicators              │
+│                                                     │
+│ Output: Bar dict with 15+ fields or None           │
+└─────────────────────────────────────────────────────┘
+
+
+Layer 2: Market Context
+┌─────────────────────────────────────────────────────┐
+│ REGIME.PY                                           │
+├─────────────────────────────────────────────────────┤
+│ Purpose: Classify market conditions                 │
+│                                                     │
+│ Detects:                                            │
+│ • Volatility regime (compression/normal/expansion) │
+│ • Structure regime (trend/range)                   │
+│ • Macro risk sentiment (risk-on/risk-off)          │
+│                                                     │
+│ Decision Logic:                                     │
+│ • Compression → NO TRADE (edges don't work)        │
+│ • Expansion + Range → NO TRADE (whipsaw risk)      │
+│ • Normal + Trend → ALLOWED                         │
+│                                                     │
+│ Output: Regime classification + trade_allowed flag │
+└─────────────────────────────────────────────────────┘
+
+
+Layer 3: Signal Generation
+┌─────────────────────────────────────────────────────┐
+│ STRATEGY.PY                                         │
+├─────────────────────────────────────────────────────┤
+│ Purpose: Generate trade ideas when regime allows    │
+│                                                     │
+│ Strategies:                                         │
+│ 1. Trend Following (EMA crossover + pullback)      │
+│ 2. Mean Reversion (Z-score extremes in range)      │
+│                                                     │
+│ Signal Contains:                                    │
+│ • Direction (BUY/SELL)                             │
+│ • Entry price                                       │
+│ • Stop loss (actual price, not distance)          │
+│ • Take profit (actual price)                       │
+│ • Timestamp                                         │
+│                                                     │
+│ Output: Signal dict or None                        │
+└─────────────────────────────────────────────────────┘
+
+
+Layer 4: Behavioral Control
+┌─────────────────────────────────────────────────────┐
+│ PSYCHOLOGY.PY                                       │
+├─────────────────────────────────────────────────────┤
+│ Purpose: Enforce behavioral discipline              │
+│                                                     │
+│ Prevents:                                           │
+│ • Overtrading (max 5 trades/day)                   │
+│ • Signal clustering (5-bar cooldown)               │
+│ • Revenge trading (streak-based throttling)        │
+│                                                     │
+│ Checks:                                             │
+│ • trades_today < MAX_TRADES_PER_DAY                │
+│ • bars_since_last_trade >= COOLDOWN                │
+│ • !risk_throttle (from monitoring)                 │
+│ • !trading_disabled (kill switch)                  │
+│                                                     │
+│ Output: Boolean (allowed or blocked)               │
+└─────────────────────────────────────────────────────┘
+
+
+Layer 5: Cost Management
+┌─────────────────────────────────────────────────────┐
+│ COSTS.PY                                            │
+├─────────────────────────────────────────────────────┤
+│ Purpose: Block trades when friction > edge          │
+│                                                     │
+│ Filters:                                            │
+│ • Spread filter (max 1.5x median)                  │
+│ • Slippage expectation (based on volatility)       │
+│ • Time filters (rollover window, news events)      │
+│                                                     │
+│ Cost Calculation:                                   │
+│ Estimated cost = spread + expected_slippage        │
+│ If cost > minimum_edge_threshold → BLOCK           │
+│                                                     │
+│ Output: Boolean (acceptable or too expensive)      │
+└─────────────────────────────────────────────────────┘
+
+
+Layer 6: Risk Management
+┌─────────────────────────────────────────────────────┐
+│ RISK.PY                                             │
+├─────────────────────────────────────────────────────┤
+│ Purpose: Calculate safe position size               │
+│                                                     │
+│ Algorithm:                                          │
+│ 1. risk_amount = equity × 0.005 (0.5%)            │
+│ 2. stop_distance = ATR × 1.5                       │
+│ 3. position_size = risk_amount / stop_distance     │
+│ 4. Apply leverage cap (max 5x effective)          │
+│ 5. Quantize to broker step (0.01 lot increments)  │
+│                                                     │
+│ Safety Rules:                                       │
+│ • Never round up (risk violation)                  │
+│ • If size < min_lot → return 0 (no trade)         │
+│ • If leverage > max → scale down proportionally    │
+│                                                     │
+│ Output: Lot size (float) or 0.0                    │
+└─────────────────────────────────────────────────────┘
+
+
+Layer 7: Execution
+┌─────────────────────────────────────────────────────┐
+│ EXECUTION.PY                                        │
+├─────────────────────────────────────────────────────┤
+│ Purpose: Translate intent into filled orders        │
+│                                                     │
+│ Process:                                            │
+│ 1. Check no existing position (one at a time)      │
+│ 2. Get current market price                        │
+│ 3. Build MT5 order request                         │
+│ 4. Send order with retry logic (max 2 retries)    │
+│ 5. Verify fill confirmation                        │
+│                                                     │
+│ Handles:                                            │
+│ • Requotes (retry with new price)                  │
+│ • Off-quotes (wait 300ms, retry)                   │
+│ • Hard failures (reject immediately)               │
+│                                                     │
+│ Output: OrderSendResult or None                    │
+└─────────────────────────────────────────────────────┘
+
+
+Layer 8: Monitoring
+┌─────────────────────────────────────────────────────┐
+│ MONITORING.PY                                       │
+├─────────────────────────────────────────────────────┤
+│ Purpose: Detect system degradation in real-time     │
+│                                                     │
+│ Tracks:                                             │
+│ • Slippage drift (rolling 20-trade window)        │
+│ • Consecutive loss streaks                         │
+│ • Execution failure count                          │
+│                                                     │
+│ Actions:                                            │
+│ • Slippage > expected+3pips → risk_throttle=True  │
+│ • 5 consecutive losses → trading_disabled=True     │
+│ • 3 execution failures → trading_disabled=True     │
+│                                                     │
+│ Output: Updates STATE flags, emits alerts          │
+└─────────────────────────────────────────────────────┘
+
+
+________________
+
+
+<a name="features-capabilities"></a>
+3. ✨ Features & Capabilities
+Core Features Matrix
+Feature
+	Implementation
+	Benefit
+	Multi-Regime Filtering
+	3-axis classification (volatility/structure/risk)
+	Avoids trading in unfavorable conditions
+	ATR-Based Position Sizing
+	Dynamic sizing based on market volatility
+	Consistent risk across all market states
+	Behavioral Safeguards
+	Cooldowns, trade caps, throttling
+	Prevents self-destructive trading patterns
+	Cost-Aware Execution
+	Spread/slippage filtering
+	Preserves edge in high-friction environments
+	Crash Recovery
+	Atomic state persistence
+	Survives VPS restarts and crashes
+	Real-Time Monitoring
+	Slippage tracking, degradation detection
+	Protects against live/backtest divergence
+	Multi-Strategy Framework
+	Pluggable strategy architecture
+	Easy to add new strategies
+	Deterministic Logic
+	Zero randomness, fully reproducible
+	Backtestable and auditable
+	________________
+
+
+Feature Deep-Dive
+1. Multi-Regime Market Classification
+VOLATILITY AXIS
+─────────────────────────────────────────────────
+ -2σ        -1σ         0          +1σ        +2σ
+  │          │          │          │          │
+DEAD    COMPRESSION  NORMAL   EXPANSION   EXTREME
+         (NO TRADE)  (TRADE)  (SELECTIVE) (NO TRADE)
+
+
+STRUCTURE AXIS
+─────────────────────────────────────────────────
+        TREND                    RANGE
+    (directional)            (mean-reverting)
+         │                         │
+    ┌────┴────┐              ┌────┴────┐
+    │         │              │         │
+  Strong   Weak           Support  Chop
+  (Trade)  (Filter)       Resistance
+
+
+RISK SENTIMENT AXIS
+─────────────────────────────────────────────────
+  RISK-OFF          NEUTRAL          RISK-ON
+(USD strength)                    (USD weakness)
+     │                │                │
+  Defensive      Balanced         Aggressive
+  Positioning     Approach         Positioning
+
+
+Decision Matrix:
+Volatility
+	Structure
+	Action
+	Compression
+	Any
+	❌ NO TRADE - Edges don't work
+	Normal
+	Trend
+	✅ TRADE - Trend following
+	Normal
+	Range
+	✅ TRADE - Mean reversion
+	Expansion
+	Trend
+	✅ TRADE - Reduced size
+	Expansion
+	Range
+	❌ NO TRADE - Whipsaw risk
+	________________
+
+
+2. ATR-Based Adaptive Position Sizing
+POSITION SIZING ALGORITHM
+═══════════════════════════════════════════════
+
+
+INPUT:
+  • Account equity: $1,000
+  • Risk per trade: 0.5% = $5
+  • Current ATR: 0.00015 (15 pips)
+  • ATR multiplier: 1.5
+  
+CALCULATION:
+  1. Stop distance = ATR × 1.5
+     = 0.00015 × 1.5 = 0.000225 (22.5 pips)
+  
+  2. Pip value per lot = 100,000 × 0.0001 = $10
+  
+  3. Raw position size = Risk / (Stop in pips × Pip value)
+     = $5 / (22.5 × $10)
+     = 0.0222 lots
+  
+  4. Check leverage:
+     Notional = 0.0222 × 100,000 × 1.0950 = $2,430
+     Leverage = $2,430 / $1,000 = 2.43x ✓ (under 5x limit)
+  
+  5. Quantize to broker step (0.01):
+     Final size = 0.02 lots
+     
+OUTPUT: 0.02 lots
+
+
+═══════════════════════════════════════════════
+
+
+RESULT: In all market states, you risk exactly 0.5% of equity
+
+
+Visual Representation:
+ATR Low (10 pips)          ATR Normal (15 pips)       ATR High (25 pips)
+─────────────────          ────────────────────       ─────────────────
+│                          │                          │
+│  ████████ 0.03 lots      │  █████ 0.02 lots        │  ███ 0.01 lots
+│  (smaller stop,          │  (normal stop,          │  (wider stop,
+│   larger size)           │   standard size)        │   smaller size)
+│                          │                          │
+│  Risk = $5               │  Risk = $5              │  Risk = $5
+└─────────────────         └─────────────────        └─────────────────
+
+
+KEY INSIGHT: Position size ADAPTS, but risk stays CONSTANT
+
+
+________________
+
+
+3. Behavioral Safeguards (Psychology-by-Code)
+3.1 Trade Frequency Control
+# Pseudocode: Daily Trade Cap
+IF trades_today >= MAX_TRADES_PER_DAY (5):
+    RETURN "NO TRADE - Daily limit reached"
+    
+# Prevents:
+# ❌ Overtrading during winning streaks
+# ❌ Revenge trading during losing streaks
+# ❌ Signal spam from indicator oscillations
+
+
+3.2 Cooldown Periods
+TIMELINE VIEW (1-minute bars)
+═══════════════════════════════════════════════
+
+
+Bar 100: TRADE EXECUTED
+           │
+           ├─→ Bar 101: COOLDOWN (1/5)
+           ├─→ Bar 102: COOLDOWN (2/5)
+           ├─→ Bar 103: COOLDOWN (3/5)
+           ├─→ Bar 104: COOLDOWN (4/5)
+           ├─→ Bar 105: COOLDOWN (5/5)
+           │
+           └─→ Bar 106: READY TO TRADE AGAIN
+
+
+═══════════════════════════════════════════════
+
+
+EFFECT: Prevents clustering of trades in same market condition
+
+
+3.3 Risk Throttling
+MONITORING TRIGGER
+─────────────────────────────────────────────
+
+
+Normal Operation:
+  Slippage: [1.5, 1.8, 2.1, 1.9, 2.0] pips
+  Median: 1.9 pips
+  Expected: 2.0 pips
+  Status: ✅ NORMAL
+
+
+Degradation Detected:
+  Slippage: [1.5, 4.2, 5.1, 4.8, 5.3] pips
+  Median: 4.8 pips
+  Expected: 2.0 pips
+  Drift: +2.8 pips (140% increase)
+  Status: ⚠️ RISK_THROTTLE = TRUE
+
+
+Action: System STOPS trading until conditions normalize
+
+
+________________
+
+
+4. Cost-Aware Execution
+COST FILTER LOGIC
+═════════════════════════════════════════════
+
+
+INPUTS:
+  • Current spread: 1.2 pips
+  • Median spread: 1.0 pip
+  • Max multiplier: 1.5x
+  • Expected slippage: 0.5 pips
+  
+CHECK 1: Spread Filter
+  IF spread > median × multiplier:
+    1.2 > 1.0 × 1.5?
+    1.2 > 1.5? NO ✓
+    
+CHECK 2: Total Cost vs Edge
+  Total cost = spread + expected_slippage
+  = 1.2 + 0.5 = 1.7 pips
+  
+  Minimum edge (at 2:1 RR): 33% win rate needed
+  Cost as % of target: 1.7 / 30 = 5.7% ✓
+  
+CHECK 3: Time Windows
+  Current time: 14:30 UTC
+  Rollover window: 21:59 - 22:05 UTC
+  Is in rollover? NO ✓
+  
+RESULT: ✅ COSTS ACCEPTABLE - Trade allowed
+
+
+═════════════════════════════════════════════
+
+
+________________
+
+
+<a name="workflow-logic"></a>
+4. 🔄 Workflow & Logic
+Complete Trade Lifecycle
+┌────────────────────────────────────────────────────────────┐
+│                    TRADE LIFECYCLE                          │
+│                  (Start to Finish)                         │
+└────────────────────────────────────────────────────────────┘
+
+
+PHASE 1: INITIALIZATION (Once at startup)
+──────────────────────────────────────────
+┌─────────────┐
+│ main.py     │
+│ starts      │
+└──────┬──────┘
+       │
+       ├─→ Initialize MT5 connection
+       ├─→ Load persisted state from disk
+       ├─→ Set up logging infrastructure
+       └─→ Enter main event loop (60s interval)
+
+
+
+
+PHASE 2: DATA ACQUISITION (Every 60 seconds)
+──────────────────────────────────────────
+┌─────────────┐
+│ 60s timer   │
+│ triggers    │
+└──────┬──────┘
+       │
+       ├─→ data.py: Fetch last CLOSED bar
+       │   └─→ VALIDATION:
+       │       • High >= Low?
+       │       • Spread > 0?
+       │       • Timestamp valid?
+       │       PASS → Continue
+       │       FAIL → Wait 60s, retry
+       │
+       └─→ indicators.py: Calculate metrics
+           └─→ COMPUTATIONS:
+               • ATR (14-period)
+               • EMA fast (20)
+               • EMA slow (50)
+               • ADX (trend strength)
+               • Z-score (mean reversion)
+               OUTPUT: Complete bar dict
+
+
+
+
+PHASE 3: REGIME DETECTION
+──────────────────────────────────────────
+┌─────────────┐
+│ regime.py   │
+│ analyzes    │
+└──────┬──────┘
+       │
+       ├─→ VOLATILITY CHECK:
+       │   ATR z-score < -1.0? → Compression (BLOCK)
+       │   ATR z-score > +1.0? → Expansion (CAUTION)
+       │   Else → Normal (ALLOW)
+       │
+       ├─→ STRUCTURE CHECK:
+       │   ADX > 25 + EMA slope ≠ 0? → Trend
+       │   Else → Range
+       │
+       └─→ DECISION:
+           Compression → trade_allowed = FALSE
+           Expansion + Range → trade_allowed = FALSE
+           Normal + Trend → trade_allowed = TRUE
+           Normal + Range → trade_allowed = TRUE
+
+
+
+
+PHASE 4: SIGNAL GENERATION
+──────────────────────────────────────────
+┌─────────────┐
+│ strategy.py │
+│ evaluates   │
+└──────┬──────┘
+       │
+       ├─→ IF regime.trade_allowed == FALSE:
+       │   RETURN None (no signal)
+       │
+       ├─→ IF regime.structure == "trend":
+       │   ├─→ CHECK: EMA fast > EMA slow?
+       │   │   YES → BUY signal
+       │   │   NO  → Check inverse
+       │   └─→ CHECK: Bar range < ATR × 1.2?
+       │       (avoid extended candles)
+       │
+       └─→ IF regime.structure == "range":
+           ├─→ CHECK: Z-score > +2?
+           │   YES → SELL signal (overbought)
+           └─→ CHECK: Z-score < -2?
+               YES → BUY signal (oversold)
+
+
+
+
+PHASE 5: BEHAVIORAL FILTERING
+──────────────────────────────────────────
+┌─────────────┐
+│psychology.py│
+│ checks      │
+└──────┬──────┘
+       │
+       ├─→ CHECK 1: trades_today < 5?
+       │   NO → BLOCK (daily limit)
+       │
+       ├─→ CHECK 2: bars_since_last_trade >= 5?
+       │   NO → BLOCK (cooldown active)
+       │
+       ├─→ CHECK 3: risk_throttle == FALSE?
+       │   NO → BLOCK (slippage drift detected)
+       │
+       └─→ CHECK 4: trading_disabled == FALSE?
+           NO → BLOCK (kill switch active)
+           
+           ALL PASS → CONTINUE
+
+
+
+
+PHASE 6: COST EVALUATION
+──────────────────────────────────────────
+┌─────────────┐
+│  costs.py   │
+│  filters    │
+└──────┬──────┘
+       │
+       ├─→ CHECK 1: Spread < median × 1.5?
+       │   NO → BLOCK (too expensive)
+       │
+       ├─→ CHECK 2: Not in rollover window?
+       │   NO → BLOCK (swap risk)
+       │
+       └─→ CHECK 3: Expected slippage acceptable?
+           NO → BLOCK (poor execution expected)
+           
+           ALL PASS → CONTINUE
+
+
+
+
+PHASE 7: POSITION SIZING
+──────────────────────────────────────────
+┌─────────────┐
+│  risk.py    │
+│  calculates │
+└──────┬──────┘
+       │
+       ├─→ STEP 1: Get account equity
+       │   equity = mt5.account_info().equity
+       │   IF equity <= 0 → RETURN 0
+       │
+       ├─→ STEP 2: Calculate risk amount
+       │   risk = equity × 0.005 (0.5%)
+       │
+       ├─→ STEP 3: Determine stop distance
+       │   stop = ATR × 1.5
+       │
+       ├─→ STEP 4: Calculate position size
+       │   size = risk / (stop_pips × pip_value)
+       │
+       ├─→ STEP 5: Apply leverage cap
+       │   IF effective_leverage > 5x:
+       │     size = size × (5 / effective_leverage)
+       │
+       └─→ STEP 6: Quantize to broker step
+           size = floor(size / 0.01) × 0.01
+           IF size < 0.01 → RETURN 0
+           
+           OUTPUT: Lot size
+
+
+
+
+PHASE 8: EXECUTION
+──────────────────────────────────────────
+┌─────────────┐
+│execution.py │
+│ places order│
+└──────┬──────┘
+       │
+       ├─→ CHECK: No existing position?
+       │   NO → ABORT (one position limit)
+       │
+       ├─→ BUILD ORDER:
+       │   {
+       │     symbol: EURUSD,
+       │     volume: 0.02,
+       │     type: BUY,
+       │     price: 1.0950,
+       │     sl: 1.0935,
+       │     tp: 1.0980
+       │   }
+       │
+       ├─→ ATTEMPT 1: mt5.order_send()
+       │   ├─→ DONE → SUCCESS
+       │   ├─→ REQUOTE → Retry with new price
+       │   ├─→ OFF_QUOTES → Wait 300ms, retry
+       │   └─→ OTHER → ABORT
+       │
+       └─→ ATTEMPT 2 (if needed):
+           Same logic, max 2 attempts
+           
+           OUTPUT: OrderSendResult or None
+
+
+
+
+PHASE 9: STATE UPDATE
+──────────────────────────────────────────
+┌─────────────┐
+│  state.py   │
+│  persists   │
+└──────┬──────┘
+       │
+       ├─→ IF order successful:
+       │   ├─→ STATE.trades_today += 1
+       │   ├─→ STATE.last_trade_bar = current_bar_index
+       │   └─→ ATOMIC SAVE to disk
+       │
+       └─→ ELSE (order failed):
+           └─→ monitoring.monitor(None)
+
+
+
+
+PHASE 10: MONITORING
+──────────────────────────────────────────
+┌─────────────┐
+│monitoring.py│
+│ evaluates   │
+└──────┬──────┘
+       │
+       ├─→ CALCULATE SLIPPAGE:
+       │   slippage = |filled_price - requested_price|
+       │   ADD to rolling 20-trade window
+       │
+       ├─→ CHECK DRIFT:
+       │   median_slippage > expected + 3 pips?
+       │   YES → STATE.risk_throttle = TRUE
+       │
+       ├─→ CHECK LOSS STREAK:
+       │   consecutive_losses >= 5?
+       │   YES → STATE.trading_disabled = TRUE
+       │
+       └─→ EMIT ALERTS if needed
+           └─→ Log to file / Telegram / Email
+
+
+
+
+PHASE 11: LOOP CONTINUATION
+──────────────────────────────────────────
+┌─────────────┐
+│  main.py    │
+│  waits      │
+└──────┬──────┘
+       │
+       └─→ SLEEP(60 seconds)
+           └─→ REPEAT from PHASE 2
+
+
+═══════════════════════════════════════════════
+END OF LIFECYCLE
+═══════════════════════════════════════════════
+
+
+________________
+
+
+Decision Tree Visualization
+                           START
+                              │
+                              ↓
+                    ┌─────────────────┐
+                    │  Get Latest Bar │
+                    └────────┬────────┘
+                             │
+                    ┌────────┴────────┐
+                    │  Bar Valid?     │
+                    └────────┬────────┘
+                             │
+                    YES ←────┴────→ NO → WAIT 60s → RETRY
+                     │
+                     ↓
+            ┌────────────────┐
+            │ Detect Regime  │
+            └────────┬───────┘
+                     │
+            ┌────────┴────────┐
+            │ Trade Allowed?  │
+            └────────┬────────┘
+                     │
+            YES ←────┴────→ NO → WAIT 60s
+             │
+             ↓
+    ┌────────────────┐
+    │ Generate Signal│
+    └────────┬───────┘
+             │
+    ┌────────┴────────┐
+    │  Signal Exists? │
+    └────────┬────────┘
+             │
+    YES ←────┴────→ NO → WAIT 60s
+     │
+     ↓
+┌──────────────────┐
+│ Psychology Check │
+└────────┬─────────┘
+         │
+┌────────┴────────┐
+│  Allowed?       │
+└────────┬────────┘
+         │
+YES ←────┴────→ NO → WAIT 60s
+ │
+ ↓
+┌──────────────┐
+│  Cost Check  │
+└──────┬───────┘
+       │
+┌──────┴────────┐
+│ Acceptable?   │
+└──────┬────────┘
+       │
+YES ←──┴────→ NO → WAIT 60s
+ │
+ ↓
+┌──────────────┐
+│  Risk Calc   │
+└──────┬───────┘
+       │
+┌──────┴────────┐
+│  Size > 0?    │
+└──────┬────────┘
+       │
+YES ←──┴────→ NO → WAIT 60s
+ │
+ ↓
+┌──────────────┐
+│   Execute    │
+└──────┬───────┘
+       │
+┌──────┴────────┐
+│  Successful?  │
+└──────┬────────┘
+       │
+YES ←──┴────→ NO
+ │             │
+ ↓             ↓
+UPDATE      MONITOR
+STATE       FAILURE
+ │             │
+ └─────┬───────┘
+       ↓
+   MONITOR
+   SYSTEM
+       │
+       ↓
+   WAIT 60s
+       │
+       └──→ LOOP TO START
+
+
+________________
+
+
+<a name="file-structure"></a>
+5. 📁 File Structure & Responsibilities
+Complete File Inventory
+trading_system/
+│
+├── 📜 main.py                    [ORCHESTRATOR]
+├── ⚙️ config.py                  [CONFIGURATION]
+├── 💾 state.py                   [PERSISTENCE]
+├── 📊 data.py                    [DATA INGESTION]
+├── 📈 indicators.py              [TECHNICAL ANALYSIS]
+├── 🌡️ regime.py                  [MARKET CONTEXT]
+├── 💡 strategy.py                [SIGNAL LOGIC]
+├── 🧠 psychology.py              [BEHAVIORAL RULES]
+├── 💰 costs.py                   [FRICTION MANAGEMENT]
+├── 🛡️ risk.py                    [POSITION SIZING]
+├── 🚀 execution.py               [ORDER HANDLING]
+├── 👁️ monitoring.py              [SYSTEM HEALTH]
+└── ⚠️ broker.py                  [EMERGENCY CONTROLS]
+
+
+________________
+
+
+File-by-File Breakdown
+1️⃣ main.py - The Orchestrator
+Purpose: Central command center that coordinates all modules
+Responsibilities:
+* Initialize MT5 connection
+* Manage 60-second event loop
+* Call modules in correct order
+* Handle errors gracefully
+* Manage shutdown sequence
+Key Functions:
+def initialize_mt5():
+    """Connect to MetaTrader 5 terminal"""
+    # Establishes API connection
+    # Validates account credentials
+    # Ensures trading is enabled
+
+
+def get_account_equity():
+    """Safely retrieve current account balance"""
+    # Gets equity (not balance - includes open P&L)
+    # Handles connection failures
+    # Returns None on error (fail-closed)
+
+
+def run():
+    """Main trading loop"""
+    # STRUCTURE:
+    # while True:
+    #     1. Reset daily state if new day
+    #     2. Fetch bar
+    #     3. Detect regime
+    #     4. Generate signal
+    #     5. Apply filters (psychology, costs)
+    #     6. Calculate size
+    #     7. Execute
+    #     8. Monitor
+    #     9. Sleep 60s
+
+
+Why It Exists:
+* Single Responsibility: Only orchestrates, never decides
+* Error Isolation: Exceptions in one iteration don't crash system
+* Clean Shutdown: Properly closes MT5 connection
+* Logging: All major events logged for debugging
+Interactions:
+main.py → ALL other modules (one-way communication)
+  ├─→ data.py (get bar)
+  ├─→ regime.py (get context)
+  ├─→ strategy.py (get signal)
+  ├─→ psychology.py (check allowed)
+  ├─→ costs.py (check acceptable)
+  ├─→ risk.py (calculate size)
+  ├─→ execution.py (place order)
+  ├─→ monitoring.py (track health)
+  └─→ state.py (persist memory)
+
+
+________________
+
+
+2️⃣ config.py - The Configuration
+Purpose: Single source of truth for all system parameters
+Why It's Critical:
+* No Magic Numbers: Every threshold is named and documented
+* Easy Tuning: Change behavior by editing config, not code
+* Backtesting: Same code, different config for historical tests
+* Environment Safety: LIVE vs BACKTEST modes
+Key Configuration Groups:
+# RISK PARAMETERS
+RISK_PER_TRADE = 0.005        # 0.5% per trade
+MAX_EFFECTIVE_LEVERAGE = 5.0   # 5x maximum
+MAX_TRADES_PER_DAY = 5         # Daily limit
+MAX_DAILY_DRAWDOWN = 0.03      # 3% daily stop
+
+
+# COST THRESHOLDS
+MEDIAN_SPREAD_PRICE = 0.00010  # 1.0 pip baseline
+MAX_SPREAD_MULTIPLIER = 1.5    # Allow 50% above median
+EXPECTED_SLIPPAGE_PIPS = 2.0   # Typical slippage
+
+
+# REGIME DETECTION
+VOL_Z_COMPRESSION = -1.0       # Below = compressed
+VOL_Z_EXPANSION = 1.0          # Above = expanded
+ADX_TREND_THRESHOLD = 25       # Trend strength cutoff
+
+
+# STRATEGY PARAMETERS
+RR_MIN = 2.0                   # 2:1 reward:risk minimum
+ATR_STOP_MULTIPLIER = 1.5      # Stop distance = ATR × 1.5
+
+
+# SYSTEM SETTINGS
+LOOP_DELAY_SECONDS = 60        # Bar frequency
+MAGIC_NUMBER = 10001           # Order identification
+STATE_FILE_PATH = "state/trading_state.json"
+
+
+Design Philosophy:
+"If you might want to change it, it belongs in config.py" "If it's a decision rule, it belongs in config.py" "If it's a threshold, it belongs in config.py"
+________________
+
+
+3️⃣ state.py - The Memory
+Purpose: Maintain system memory across ticks and crashes
+Why It Exists:
+* Crash Recovery: System can restart mid-day without losing state
+* VPS Reliability: Handles unexpected restarts gracefully
+* Daily Resets: Automatically clears counters at midnight
+* Audit Trail: Know exactly what system "remembers"
+State Structure:
+@dataclass
+class TradingState:
+    trading_day: str              # "2025-01-15"
+    trades_today: int             # 0-5
+    last_trade_bar: int           # Bar index of last trade
+    risk_throttle: bool           # Slippage protection active?
+    trading_disabled: bool        # Kill switch active?
+    consecutive_losses: int       # Current loss streak
+    execution_failures: int       # Failed order count
+    last_update_ts: str           # Last save timestamp
+
+
+Persistence Mechanism:
+# ATOMIC FILE WRITE (crash-safe)
+# 1. Write to temporary file
+# 2. Flush to disk
+# 3. Atomically replace old file
+# 
+# Result: Never corrupted state files
+
+
+Why Atomic Writes Matter:
+CRASH SCENARIO WITHOUT ATOMIC WRITES:
+  1. Start writing state file
+  2. System crashes mid-write
+  3. File is corrupted (half-written)
+  4. On restart: Cannot load state
+  5. System doesn't know if it traded today
+  6. Risk: Trade limit violated
+
+
+WITH ATOMIC WRITES:
+  1. Write to temp file
+  2. Crash happens
+  3. Temp file lost, but original still valid
+  4. On restart: Load last good state
+  5. System knows exact state
+  6. Safety: Trade limits preserved
+
+
+________________
+
+
+4️⃣ data.py - The Data Ingestion Layer
+Purpose: Fetch and validate market data
+Core Responsibility:
+"Provide ONE clean, validated, indicator-rich bar per call"
+Why It's Separate:
+* Data Quality Gate: Invalid data never reaches strategy
+* Indicator Enrichment: Bar includes ALL needed metrics
+* Monotonic Indexing: Bar counter for time-based logic
+* Fail-Closed Design: Uncertainty → None (no data returned)
+What It Returns:
+{
+    "bar_index": 1234,           # Monotonic counter
+    "timestamp": datetime(...),  # UTC timestamp
+    "open": 1.0950,
+    "high": 1.0955,
+    "low": 1.0948,
+    "close": 1.0952,
+    "volume": 125,
+    "spread": 0.00012,           # PRICE UNITS (not pips!)
+    "range": 0.00007,            # High - Low
+    "atr": 0.00015,              # Average True Range
+    "ema_fast": 1.0951,          # 20-period EMA
+    "ema_slow": 1.0949,          # 50-period EMA
+    "zscore": -0.5,              # Price z-score
+    "indicator_context": {...}   # Full indicator history
+}
+
+
+Critical Design Decision:
+# AVOID LOOKAHEAD BIAS
+# Always use LAST CLOSED bar (rates[-2])
+# Never use current bar (rates[-1]) - it's incomplete!
+
+
+rates = mt5.copy_rates_from_pos(SYMBOL, TIMEFRAME, 0, 2)
+bar = rates[-2]  # ← CLOSED bar only
+
+
+Why This Matters:
+LOOKAHEAD BIAS EXAMPLE:
+  Current time: 14:30:30 (30 seconds into bar)
+  Current bar: [1.0950, high=1.0952, low=1.0948, close=1.0951]
+  
+  If you trade on this bar's high/low:
+    - Backtest: Uses final values (knows the future)
+    - Live: Values can still change (30s remaining)
+    
+  Result: Backtest shows profits that can't exist live
+
+
+________________
+
+
+5️⃣ indicators.py - The Technical Analysis Engine
+Purpose: Calculate all technical indicators needed by regime and strategy
+Why It's Separate:
+* Reusability: Multiple modules use same indicators
+* Testing: Can test indicators independently
+* Performance: Centralized calculation (compute once, use many times)
+* Maintainability: All indicator logic in one place
+Key Indicators:
+Indicator
+	Purpose
+	Used By
+	ATR (Average True Range)
+	Volatility measurement
+	Regime, Risk, Strategy
+	ATR Z-Score
+	Volatility regime
+	Regime
+	ADX (Directional Index)
+	Trend strength
+	Regime
+	EMA (Exponential MA)
+	Trend direction
+	Strategy
+	EMA Slope
+	Trend acceleration
+	Regime
+	Z-Score
+	Mean reversion
+	Strategy
+	DXY Proxy
+	USD strength
+	Regime
+	Yield Proxy
+	Risk sentiment
+	Regime
+	Example: ATR Calculation
+def calculate_atr(high, low, close, period=14):
+    """
+    True Range = max of:
+      1. Current high - current low
+      2. |Current high - previous close|
+      3. |Current low - previous close|
+    
+    ATR = Simple Moving Average of True Range
+    """
+    # Compute True Range
+    tr1 = high[1:] - low[1:]
+    tr2 = abs(high[1:] - close[:-1])
+    tr3 = abs(low[1:] - close[:-1])
+    tr = maximum(tr1, maximum(tr2, tr3))
+    
+    # ATR = 14-period average
+    atr = mean(tr[-period:])
+    
+    return atr
+
+
+Why ATR is Critical:
+POSITION SIZING WITHOUT ATR:
+  • Fixed stop: 20 pips
+  • Low volatility (ATR=10): Stop too wide, size too small
+  • High volatility (ATR=30): Stop too tight, stopped out
+
+
+POSITION SIZING WITH ATR:
+  • Dynamic stop: ATR × 1.5
+  • Low volatility: Smaller stop, larger size
+  • High volatility: Wider stop, smaller size
+  • Result: CONSTANT RISK across all conditions
+
+
+________________
+
+
+6️⃣ regime.py - The Market Context Engine
+Purpose: Classify market conditions to filter trading opportunities
+Core Philosophy:
+"Most of the time, the best trade is no trade"
+Three-Axis Classification:
+1. Volatility Regime
+
+   * Measures: ATR z-score
+   * States: Compression / Normal / Expansion
+   * Action: Blocks trades in compression (no edge)
+   2. Structure Regime
+
+      * Measures: ADX + EMA slope
+      * States: Trend / Range
+      * Action: Routes to appropriate strategy
+      3. Risk Sentiment
+
+         * Measures: USD strength proxies
+         * States: Risk-on / Neutral / Risk-off
+         * Action: Adjusts position sizing (future feature)
+Decision Matrix:
+IF volatility == "compression":
+    # Market too quiet, edges don't work
+    trade_allowed = FALSE
+    
+ELIF volatility == "expansion" AND structure == "range":
+    # High volatility + no trend = whipsaw hell
+    trade_allowed = FALSE
+    
+ELSE:
+    # Normal volatility + any structure
+    # OR expansion + trend (with caution)
+    trade_allowed = TRUE
+
+
+Real-World Impact:
+WITHOUT REGIME FILTERING:
+  Total signals: 50/day
+  Trades taken: 50/day
+  Win rate: 45% (compression kills it)
+  Result: Slow bleed
+
+
+WITH REGIME FILTERING:
+  Total signals: 50/day
+  Signals in good regime: 15/day
+  Trades taken: 5/day (psychology caps)
+  Win rate: 55% (only good setups)
+  Result: Sustainable edge
+
+
+________________
+
+
+7️⃣ strategy.py - The Signal Generator
+Purpose: Generate buy/sell signals when regime permits
+Core Principle:
+"Strategy generates ideas. Risk, psychology, and costs decide if they happen."
+Two Embedded Strategies:
+Strategy 1: Trend Following
+# CONCEPT: Trade pullbacks in established trends
+
+
+ENTRY RULES:
+  • EMA(20) > EMA(50) → Trend is UP
+  • Wait for pullback (price near EMA)
+  • Avoid extended bars (range < ATR × 1.2)
+  • BUY on confirmation
+
+
+STOP LOSS:
+  • 1.5 × ATR below entry
+
+
+TAKE PROFIT:
+  • 3.0 × ATR above entry (2:1 RR)
+
+
+Strategy 2: Mean Reversion
+# CONCEPT: Fade extremes in ranging markets
+
+
+ENTRY RULES:
+  • Calculate 20-bar z-score
+  • Z > +2 → Overbought → SELL
+  • Z < -2 → Oversold → BUY
+
+
+STOP LOSS:
+  • 1.5 × ATR (volatility-adjusted)
+
+
+TAKE PROFIT:
+  • 3.0 × ATR (2:1 RR)
+
+
+Signal Output:
+{
+    "direction": "BUY",
+    "entry_price": 1.0950,
+    "sl": 1.0935,           # Actual price (not distance!)
+    "tp": 1.0980,           # Actual price
+    "stop_distance": 0.00015,
+    "target_distance": 0.00030,
+    "timestamp": datetime(...)
+}
+
+
+**Why
+Actual Prices in Signal:**
+WRONG WAY (Distance-based):
+  signal = {
+    "direction": "BUY",
+    "stop_distance": 15  # pips
+  }
+  # execution.py has to calculate actual price
+  # Risk of miscalculation
+
+
+RIGHT WAY (Price-based):
+  signal = {
+    "direction": "BUY",
+    "entry_price": 1.0950,
+    "sl": 1.0935,  # ACTUAL executable price
+    "tp": 1.0980   # ACTUAL executable price
+  }
+  # execution.py just uses these values
+  # Zero ambiguity
+
+
+________________
+
+
+8️⃣ psychology.py - The Behavioral Control System
+Purpose: Enforce discipline that humans struggle with
+Why Humans Fail:
+         1. Overtrading Winner's Bias: "I'm hot, let me trade more!"
+         2. Revenge Trading: "I just lost, I need to win it back NOW"
+         3. Signal Spam Chasing: "The indicator flipped, I must act!"
+         4. Fatigue Deterioration: "I've been watching screens for 8 hours..."
+How Code Fixes It:
+def psychology_ok(current_bar_index) -> bool:
+    """
+    HARD RULES (no exceptions):
+    
+    1. Max 5 trades per day
+       WHY: Prevents overtrading
+       EFFECT: Forces selectivity
+    
+    2. 5-bar cooldown after each trade
+       WHY: Prevents clustering in same condition
+       EFFECT: Spreads trades across time
+    
+    3. Risk throttle from monitoring
+       WHY: Prevents trading when execution degrades
+       EFFECT: Protects during abnormal markets
+    
+    4. Global kill switch
+       WHY: Manual override capability
+       EFFECT: Operator can stop system instantly
+    """
+
+
+Real-World Scenario:
+HUMAN TRADER (Discretionary):
+  09:00 - Takes trade, wins +30 pips
+  09:05 - Confidence boost, takes another
+  09:12 - Another winner +25 pips
+  09:20 - Feeling invincible, bigger size
+  09:35 - Market reverses, -60 pips
+  10:00 - Revenge trade, -40 pips
+  10:30 - Emotional, forced break
+  
+  Result: +55 pips → -45 pips (net -90 pip swing)
+  Trades: 5 in 90 minutes (too many)
+
+
+ALGO TRADER (With Psychology Module):
+  09:00 - Takes trade, wins +30 pips
+  09:01-09:05 - COOLDOWN (forced wait)
+  09:06 - Signal appears, BLOCKED (cooldown)
+  09:15 - Takes second trade, wins +25 pips
+  09:16-09:20 - COOLDOWN
+  09:35 - Market reverses, signal appears
+        - BLOCKED (only 2 trades, but cooldown active)
+  10:00 - Cooldown ends, evaluates objectively
+        - No signal present, waits
+  
+  Result: +55 pips (preserved)
+  Trades: 2 in 15 minutes (optimal)
+
+
+Key Insight:
+The psychology module doesn't make you smarter. It prevents you from being stupid.
+________________
+
+
+9️⃣ costs.py - The Friction Manager
+Purpose: Block trades when transaction costs exceed edge
+The Cost Problem:
+THEORETICAL EDGE:
+  Strategy win rate: 55%
+  Average win: 30 pips
+  Average loss: 15 pips
+  Expected value: +7.5 pips per trade
+
+
+REAL-WORLD COSTS:
+  Spread: 1.5 pips (both entry and exit)
+  Slippage: 0.5 pips average
+  Total cost: 2.0 pips per trade
+  
+ACTUAL EDGE:
+  Expected value: 7.5 - 2.0 = +5.5 pips
+  Cost as % of edge: 27%!
+
+
+Cost Filters:
+1. SPREAD FILTER
+   IF current_spread > median_spread × 1.5:
+       BLOCK
+   
+   WHY: Abnormally wide spreads signal:
+        • Low liquidity
+        • News events
+        • Session transitions
+   
+2. ROLLOVER FILTER
+   IF time in [21:59 - 22:05 UTC]:
+       BLOCK
+   
+   WHY: Swap charges applied
+        Wide spreads
+        Unpredictable fills
+
+
+3. SLIPPAGE EXPECTATION
+   IF spread > acceptable_slippage_threshold:
+       BLOCK
+   
+   WHY: If spread is wide, slippage likely worse
+        Combined cost exceeds edge
+
+
+Real Example:
+NORMAL CONDITION:
+  Time: 14:30 UTC (London/NY overlap)
+  Spread: 1.0 pip
+  Expected slippage: 0.3 pips
+  Total cost: 1.3 pips
+  Decision: ✅ ACCEPTABLE
+
+
+ADVERSE CONDITION:
+  Time: 22:01 UTC (rollover)
+  Spread: 3.5 pips
+  Expected slippage: 1.5 pips
+  Total cost: 5.0 pips
+  Decision: ❌ BLOCKED (cost > typical target)
+
+
+________________
+
+
+🔟 risk.py - The Supreme Authority
+Purpose: Calculate position size that satisfies ALL risk constraints
+Why This is "Supreme Authority":
+No other module can override risk.py If risk.py returns 0, there is no trade Risk management is non-negotiable
+The Algorithm:
+STEP 1: Determine Risk Amount
+  risk_dollars = equity × RISK_PER_TRADE
+  # $1000 × 0.005 = $5
+
+
+STEP 2: Calculate Stop Distance
+  stop_pips = ATR × ATR_STOP_MULTIPLIER
+  # 15 pips × 1.5 = 22.5 pips
+
+
+STEP 3: Calculate Pip Value
+  pip_value = CONTRACT_SIZE × PIP_SIZE
+  # 100,000 × 0.0001 = $10/pip per lot
+
+
+STEP 4: Calculate Raw Position Size
+  lots = risk_dollars / (stop_pips × pip_value)
+  # $5 / (22.5 × $10) = 0.0222 lots
+
+
+STEP 5: Apply Leverage Cap
+  notional = lots × CONTRACT_SIZE × price
+  # 0.0222 × 100,000 × 1.0950 = $2,432
+  
+  leverage = notional / equity
+  # $2,432 / $1,000 = 2.43x
+  
+  IF leverage > MAX_LEVERAGE (5x):
+      lots = lots × (MAX_LEVERAGE / leverage)
+
+
+STEP 6: Quantize to Broker Step
+  # Broker allows 0.01, 0.02, 0.03, etc.
+  quantized = floor(lots / 0.01) × 0.01
+  # floor(0.0222 / 0.01) × 0.01 = 0.02 lots
+
+
+STEP 7: Validate Minimum
+  IF quantized < min_lot_size:
+      RETURN 0  # Too small, can't trade
+  
+  ELSE:
+      RETURN quantized
+
+
+Why This is Complex:
+NAIVE APPROACH:
+  "I'll just risk $5 on every trade"
+  Problem: What's the position size?
+           Depends on stop distance
+           Which depends on volatility
+           Which changes constantly
+
+
+SOPHISTICATED APPROACH:
+  1. Know your risk tolerance ($5)
+  2. Measure current volatility (ATR)
+  3. Set stop proportional to volatility
+  4. Calculate size that risks exactly $5
+  
+  Result: CONSTANT RISK, ADAPTIVE SIZE
+
+
+Critical Safety Feature:
+# NEVER ROUND UP (risk violation)
+def _quantize_lot_size(lots, info):
+    step = info.volume_step  # 0.01
+    quantized = (lots // step) * step  # Floor division
+    
+    # WRONG: quantized = round(lots / step) * step
+    # WHY: round(0.0249, 0.01) = 0.03
+    #      This is 20% MORE risk than calculated!
+    
+    # RIGHT: quantized = floor(lots / step) * step
+    # WHY: floor(0.0249, 0.01) = 0.02
+    #      This is LESS than calculated (safe)
+
+
+________________
+
+
+1️⃣1️⃣ execution.py - The Order Handler
+Purpose: Convert trading intent into filled orders
+Why It's Separate:
+         * Retry Logic: Handle temporary failures
+         * Fill Verification: Confirm execution
+         * Error Handling: Distinguish retriable vs. fatal errors
+Execution Flow:
+def execute_trade(signal, volume):
+    # STEP 1: Validate Preconditions
+    IF already_have_position():
+        RETURN None  # One position limit
+    
+    IF volume <= 0:
+        RETURN None  # Invalid size
+    
+    # STEP 2: Get Current Market Price
+    tick = mt5.symbol_info_tick(SYMBOL)
+    IF signal["direction"] == "BUY":
+        price = tick.ask
+    ELSE:
+        price = tick.bid
+    
+    # STEP 3: Build Order Request
+    request = {
+        "action": TRADE_ACTION_DEAL,
+        "symbol": "EURUSD",
+        "volume": 0.02,
+        "type": ORDER_TYPE_BUY,
+        "price": 1.0950,
+        "sl": 1.0935,
+        "tp": 1.0980,
+        "magic": 10001,
+        "deviation": 20
+    }
+    
+    # STEP 4: Execute with Retry Logic
+    FOR attempt IN [1, 2]:
+        result = mt5.order_send(request)
+        
+        IF result.retcode == TRADE_RETCODE_DONE:
+            RETURN result  # ✅ SUCCESS
+        
+        IF result.retcode IN [REQUOTE, PRICE_CHANGED]:
+            # Price moved, retriable
+            SLEEP(300ms)
+            GET new price
+            CONTINUE  # Retry
+        
+        ELSE:
+            RETURN None  # ❌ FATAL ERROR
+    
+    # Max retries exceeded
+    RETURN None
+
+
+Error Categorization:
+Error Code
+	Type
+	Action
+	TRADE_RETCODE_DONE
+	Success
+	Return result
+	REQUOTE
+	Retriable
+	Update price, retry
+	PRICE_CHANGED
+	Retriable
+	Update price, retry
+	OFF_QUOTES
+	Retriable
+	Wait 300ms, retry
+	INVALID_STOPS
+	Fatal
+	Return None
+	NOT_ENOUGH_MONEY
+	Fatal
+	Return None
+	MARKET_CLOSED
+	Fatal
+	Return None
+	Why Max 2 Attempts:
+THEORY: More retries = higher fill rate
+
+
+REALITY: If you can't fill after 2 attempts:
+  • Market is moving too fast
+  • Liquidity is poor
+  • Broker has issues
+  
+  → These are signs you SHOULDN'T be trading
+  → More retries = chasing bad conditions
+  → Better to skip this opportunity
+
+
+________________
+
+
+1️⃣2️⃣ monitoring.py - The Watchdog
+Purpose: Detect when live performance diverges from expectations
+Core Responsibility:
+"Compare what IS happening vs. what SHOULD happen" "Apply kill switches before damage compounds"
+Three Monitoring Systems:
+1. Slippage Monitoring
+# Track last 20 trades
+slippage_window = [1.2, 1.5, 1.8, 2.1, ...]
+
+
+# Calculate median
+median_slippage = 1.8 pips
+
+
+# Compare to expectation
+IF median_slippage > EXPECTED + MAX_DRIFT:
+    # 1.8 > 2.0 + 3.0? NO ✓
+    STATE.risk_throttle = FALSE
+
+
+IF median_slippage > 5.5:  # 2.0 + 3.5
+    # Market conditions degraded
+    STATE.risk_throttle = TRUE
+    EMIT_ALERT("Slippage drift detected")
+
+
+Why This Matters:
+BACKTEST ASSUMPTIONS:
+  Average slippage: 2.0 pips
+  Strategy edge: 7.5 pips per trade
+  Cost ratio: 27%
+
+
+LIVE DEGRADATION:
+  Average slippage: 5.0 pips (2.5x worse)
+  Strategy edge: 7.5 pips (unchanged)
+  Cost ratio: 67%!
+  
+  → Strategy no longer profitable
+  → monitoring.py detects this
+  → Stops trading automatically
+
+
+2. Loss Streak Monitoring
+IF consecutive_losses >= 5:
+    STATE.trading_disabled = TRUE
+    EMIT_ALERT("Max loss streak reached")
+
+
+Why 5 Losses:
+PROBABILITY ANALYSIS:
+  Assuming 55% win rate:
+  
+  P(5 losses in a row) = 0.45^5 = 1.8%
+  
+  If this happens:
+    • Could be variance (1.8% chance)
+    • Could be regime shift (strategy broken)
+    • Could be execution issues
+  
+  → Better to stop and investigate
+  → Manual review required
+  → Prevents runaway drawdown
+
+
+3. Execution Failure Monitoring
+IF execution_failures >= 3:
+    STATE.trading_disabled = TRUE
+    EMIT_ALERT("Multiple execution failures")
+
+
+What This Catches:
+         * Broker connectivity issues
+         * Account margin problems
+         * Symbol trading disabled
+         * API rate limiting
+________________
+
+
+1️⃣3️⃣ broker.py - The Emergency Stop
+Purpose: Nuclear option for immediate position closure
+When To Use:
+         * Manual intervention needed
+         * System malfunction detected
+         * Emergency market conditions
+         * Testing/maintenance
+Core Function:
+def flatten_all():
+    """
+    Close ALL open positions immediately
+    No questions asked
+    """
+    positions = mt5.positions_get()
+    
+    FOR each position:
+        # Determine opposite order type
+        IF position.type == BUY:
+            close_type = SELL
+            price = bid
+        ELSE:
+            close_type = BUY
+            price = ask
+        
+        # Build close request
+        request = {
+            "action": TRADE_ACTION_DEAL,
+            "position": position.ticket,
+            "volume": position.volume,
+            "type": close_type,
+            "price": price,
+            "comment": "EMERGENCY_FLAT"
+        }
+        
+        # Execute immediately
+        mt5.order_send(request)
+
+
+Use Cases:
+SCENARIO 1: System Detects Critical Error
+  → monitoring.py sees execution_failures >= 3
+  → Sets trading_disabled = TRUE
+  → Operator gets alert
+  → Manually runs: flatten_all()
+  → All positions closed
+  → Investigate issue offline
+
+
+SCENARIO 2: VPS Maintenance Required
+  → Operator needs to restart VPS
+  → Before shutdown: flatten_all()
+  → Ensures no orphaned positions
+  → Safe to perform maintenance
+
+
+SCENARIO 3: Major News Event
+  → NFP / FOMC / Central Bank announcement
+  → Operator doesn't want exposure
+  → Runs: flatten_all()
+  → Sets: trading_disabled = TRUE
+  → Sits out volatile period
+
+
+Why It's Separate from execution.py:
+execution.py: NORMAL operations
+  • One position at a time
+  • Follows all rules
+  • Integrated with system
+
+
+broker.py: EMERGENCY operations
+  • Closes ALL positions
+  • Ignores all rules
+  • Manual intervention tool
+
+
+________________
+
+
+<a name="technical-implementation"></a>
+6. 💻 Technical Implementation
+Technology Stack
+┌─────────────────────────────────────────────────────┐
+│                  TECHNOLOGY STACK                    │
+├─────────────────────────────────────────────────────┤
+│                                                      │
+│  LANGUAGE:       Python 3.8+                        │
+│  BROKER API:     MetaTrader5 (mt5)                  │
+│  DATA ANALYSIS:  NumPy                              │
+│  STORAGE:        JSON (state persistence)           │
+│  LOGGING:        Python logging module              │
+│  DEPLOYMENT:     VPS (Ubuntu/Windows Server)        │
+│                                                      │
+└─────────────────────────────────────────────────────┘
+
+
+Why Python?
+Requirement
+	Python Advantage
+	Rapid prototyping
+	Interpreted, easy to test
+	Financial libraries
+	NumPy, pandas ecosystem
+	MT5 integration
+	Official Python API
+	Maintainability
+	Readable, self-documenting
+	Community
+	Large quant/trading community
+	Why MetaTrader 5?
+Feature
+	Benefit
+	Retail-friendly
+	Low barrier to entry
+	Wide broker support
+	Many brokers offer MT5
+	Python API
+	Official integration
+	Backtesting
+	Built-in strategy tester
+	Free
+	No platform fees
+	________________
+
+
+Architecture Patterns
+1. Fail-Closed Architecture
+# EVERY function that can fail returns None/False/0
+
+
+def get_latest_bar():
+    if data_invalid:
+        return None  # Fail closed
+    return bar
+
+
+def psychology_ok(bar_index):
+    if any_check_fails:
+        return False  # Fail closed
+    return True
+
+
+def calculate_position_size(bar, equity):
+    if cannot_calculate:
+        return 0.0  # Fail closed
+    return size
+
+
+# RESULT: Unknown state = safe state (no trade)
+
+
+Why This Matters:
+FAIL-OPEN (Dangerous):
+  Error → Assume OK → Trade anyway
+  Result: Trades during errors
+
+
+FAIL-CLOSED (Safe):
+  Error → Assume NOT OK → Skip trade
+  Result: Only trades when certain
+
+
+2. Hierarchical Veto Pattern
+# Each layer can say NO
+# No layer can override a previous NO
+
+
+bar = get_latest_bar()
+if bar is None:  # Data layer veto
+    return
+
+
+regime = detect_regime(bar)
+if not regime["trade_allowed"]:  # Regime layer veto
+    return
+
+
+signal = generate_signal(bar, regime)
+if signal is None:  # Strategy layer veto
+    return
+
+
+if not psychology_ok(bar["bar_index"]):  # Psychology veto
+    return
+
+
+if not costs_ok(bar):  # Cost layer veto
+    return
+
+
+size = calculate_position_size(bar, equity)
+if size <= 0:  # Risk layer veto
+    return
+
+
+# Only trades if NOTHING vetoed
+
+
+3. Atomic State Persistence
+def save():
+    # WRONG WAY (Not atomic):
+    with open("state.json", "w") as f:
+        json.dump(data, f)  # Crash here = corrupted file
+    
+    # RIGHT WAY (Atomic):
+    with tempfile.NamedTemporaryFile("w", delete=False) as tmp:
+        json.dump(data, tmp)
+        tmp.flush()
+        os.fsync(tmp.fileno())  # Force write to disk
+        temp_name = tmp.name
+    
+    os.replace(temp_name, "state.json")  # Atomic operation
+    # Crash anywhere = either old or new file, never corrupted
+
+
+4. Separation of Concerns
+┌────────────────────────────────────────┐
+│  CONCERN            │  MODULE          │
+├────────────────────────────────────────┤
+│  Data acquisition   │  data.py         │
+│  Market context     │  regime.py       │
+│  Trade ideas        │  strategy.py     │
+│  Behavior rules     │  psychology.py   │
+│  Cost management    │  costs.py        │
+│  Position sizing    │  risk.py         │
+│  Order placement    │  execution.py    │
+│  System health      │  monitoring.py   │
+│  Configuration      │  config.py       │
+│  State management   │  state.py        │
+│  Orchestration      │  main.py         │
+└────────────────────────────────────────┘
+
+
+RULE: Each module has ONE responsibility
+BENEFIT: Easy to test, modify, extend
+
+
+________________
+
+
+Data Flow Diagram
+┌──────────────┐
+│   MT5 API    │  (External system)
+└──────┬───────┘
+       │
+       ↓ [Tick data, bars, account info]
+       │
+┌──────┴───────────────────────────────────────────┐
+│              DATA.PY + INDICATORS.PY             │
+│  • Fetch closed bars                             │
+│  • Calculate technical indicators                │
+│  • Enrich with context                           │
+└──────┬───────────────────────────────────────────┘
+       │
+       ↓ [Complete bar dict]
+       │
+┌──────┴───────────────────────────────────────────┐
+│                  REGIME.PY                        │
+│  • Classify volatility                           │
+│  • Classify structure                            │
+│  • Determine trade permission                    │
+└──────┬───────────────────────────────────────────┘
+       │
+       ↓ [Regime metadata + trade_allowed flag]
+       │
+┌──────┴───────────────────────────────────────────┐
+│                 STRATEGY.PY                       │
+│  • Evaluate entry conditions                     │
+│  • Calculate SL/TP                               │
+│  • Generate signal                               │
+└──────┬───────────────────────────────────────────┘
+       │
+       ↓ [Signal dict or None]
+       │
+┌──────┴────┬─────────┬─────────┬──────────────────┐
+│           │         │         │                  │
+│  PSYCHOLOGY.PY  COSTS.PY  RISK.PY  (Filters)    │
+│           │         │         │                  │
+│      ✓/✗      ✓/✗      lot size                 │
+└───────────┴─────────┴────────┬──────────────────┘
+                               │
+                               ↓ [Validated signal + size]
+                               │
+                    ┌──────────┴────────────┐
+                    │    EXECUTION.PY        │
+                    │  • Build MT5 order     │
+                    │  • Send with retries   │
+                    │  • Verify fill         │
+                    └──────────┬─────────────┘
+                               │
+                               ↓ [Order result]
+                               │
+                    ┌──────────┴────────────┐
+                    │   MONITORING.PY        │
+                    │  • Track slippage      │
+                    │  • Monitor streaks     │
+                    │  • Update STATE flags  │
+                    └──────────┬─────────────┘
+                               │
+                               ↓ [Updated state]
+                               │
+                    ┌──────────┴────────────┐
+                    │      STATE.PY          │
+                    │  • Persist to disk     │
+                    │  • Handle daily reset  │
+                    └────────────────────────┘
+
+
+________________
+
+
+Error Handling Strategy
+Layers of Defense
+LAYER 1: Input Validation
+  • Check data types
+  • Verify ranges
+  • Confirm required fields exist
+
+
+LAYER 2: Try-Except Blocks
+  • Wrap external API calls
+  • Handle unexpected errors
+  • Log exceptions
+
+
+LAYER 3: Fail-Closed Defaults
+  • Return None/False/0 on error
+  • Never guess or assume
+  • Propagate safety up the chain
+
+
+LAYER 4: Monitoring
+  • Track error frequency
+  • Disable trading if errors persist
+  • Alert operator
+
+
+LAYER 5: Manual Override
+  • Kill switches accessible
+  • Flatten positions on demand
+  • Review logs offline
+
+
+Example: Multi-Layer Error Handling
+def get_latest_bar():
+    try:
+        # LAYER 1: Input Validation
+        rates = _get_rates()
+        if rates is None:
+            return None
+        
+        tick = _get_tick()
+        if tick is None:
+            return None
+        
+        # LAYER 2: Try-Except
+        bar = rates[-2]
+        
+        # LAYER 1: Validation
+        if bar["high"] < bar["low"]:
+            return None
+        
+        spread = tick.ask - tick.bid
+        if spread <= 0:
+            return None
+        
+        # LAYER 2: Try-Except (indicators)
+        indicators = fetch_indicator_data()
+        if not indicators:
+            return None
+        
+        # Success: return complete bar
+        return {
+            "timestamp": ...,
+            "close": ...,
+            **indicators
+        }
+        
+    except Exception as e:
+        # LAYER 2: Exception handling
+        logging.error(f"Error in get_latest_bar: {e}")
+        return None  # LAYER 3: Fail closed
+
+
+# LAYER 4: Monitoring (in main.py)
+bar = get_latest_bar()
+if bar is None:
+    failed_attempts += 1
+    if failed_attempts >= 10:
+        STATE.trading_disabled = True  # Kill switch
+
+
+________________
+
+
+<a name="user-experience"></a>
+7. 🎨 User Experience & Safety
+User Journey
+┌────────────────────────────────────────────────────┐
+│             USER JOURNEY PHASES                     │
+└────────────────────────────────────────────────────┘
+
+
+PHASE 1: SETUP (One-time)
+──────────────────────────────────────
+User Action:
+  1. Download files
+  2. Install dependencies (pip install ...)
+  3. Create directories (logs/, state/)
+  4. Configure config.py
+  5. Open demo MT5 account
+  6. Enable algo trading in MT5
+
+
+System Feedback:
+  • Clear directory structure
+  • Documented config file
+  • Validation script available
+  • Error messages guide fixes
+
+
+
+
+PHASE 2: FIRST RUN (Day 1)
+──────────────────────────────────────
+User Action:
+  1. Run: python main.py
+  2. Watch logs/trading.log
+
+
+System Feedback:
+  ✅ "MT5 initialized successfully"
+  ✅ "Starting main trading loop"
+  ✅ "Bar 1: close=1.09500, atr=0.00015"
+  ℹ️  "Regime: compression/range, allowed=False"
+  ℹ️  "No signal generated"
+
+
+User Experience:
+  • Immediate confirmation system works
+  • Understand why no trades yet (regime)
+  • Build trust in system logic
+
+
+
+
+PHASE 3: FIRST TRADE (Within 24h)
+──────────────────────────────────────
+User sees in logs:
+  ℹ️  "Regime: normal/trend, allowed=True"
+  ℹ️  "Signal: BUY @ 1.09500, SL=1.09350, TP=1.09800"
+  ✅ "Position size calculated: 0.02 lots"
+  ✅ "✅ Trade executed successfully: BUY 0.02 lots"
+
+
+User Experience:
+  • Full transparency into decision
+  • See risk management in action
+  • Confidence in system logic
+
+
+
+
+PHASE 4: DAILY OPERATION (Ongoing)
+──────────────────────────────────────
+System runs 24/5 (Mon-Fri):
+  • Evaluates market every 60s
+  • Logs all decisions
+  • Manages positions automatically
+  • Respects daily limits
+
+
+User checks periodically:
+  • Review logs
+  • Check MT5 positions
+  • Verify state file
+  • Monitor alerts (if configured)
+
+
+
+
+PHASE 5: ISSUES (If they arise)
+──────────────────────────────────────
+System detects problem:
+  ⚠️  "Slippage drift detected"
+  ⚠️  "TRADING DISABLED – MANUAL REVIEW REQUIRED"
+
+
+User response:
+  1. Check logs for context
+  2. Review recent trades in MT5
+  3. Decide: Fix and re-enable, or leave disabled
+  4. Optional: Run broker.flatten_all() if needed
+
+
+
+
+PHASE 6: ANALYSIS (Weekly/Monthly)
+──────────────────────────────────────
+User analyzes performance:
+  • Export MT5 trade history
+  • Review logs/trading.log
+  • Check state/trading_state.json
+  • Calculate metrics (win rate, avg P&L, etc.)
+  • Adjust config.py if needed
+
+
+________________
+
+
+Safety Features
+1. Multiple Kill Switches
+┌────────────────────────────────────────────────┐
+│           KILL SWITCH HIERARCHY                 │
+├────────────────────────────────────────────────┤
+│                                                │
+│  LEVEL 1: Automatic (System-Initiated)         │
+│    • 5 consecutive losses                      │
+│    • 3 execution failures                      │
+│    • Slippage drift > threshold                │
+│    ACTION: STATE.trading_disabled = TRUE       │
+│                                                │
+│  LEVEL 2: Manual (User-Initiated)              │
+│    • Edit state file: trading_disabled = true  │
+│    • Or use admin interface (future feature)   │
+│    ACTION: System stops taking new trades      │
+│                                                │
+│  LEVEL 3: Emergency (Immediate)                │
+│    • Run: broker.flatten_all()                 │
+│    • Closes ALL positions instantly            │
+│    ACTION: Forced exit, no questions           │
+│                                                │
+│  LEVEL 4: Nuclear (Last Resort)                │
+│    • Kill python process: Ctrl+C or kill PID   │
+│    • Close positions manually in MT5           │
+│    ACTION: Complete system shutdown            │
+│                                                │
+└────────────────────────────────────────────────┘
+
+
+2. Position Limits
+# ONE POSITION AT A TIME (in execution.py)
+if _positions_count() > 0:
+    return None  # Already in trade
+
+
+# WHY:
+# • Simplifies risk management
+# • Prevents correlation issues
+# • Easier to track P&L
+# • Reduces complexity
+
+
+3. Daily Reset Protection
+# At midnight UTC (in state.py)
+def reset_if_new_day():
+    today = date.today().isoformat()
+    if STATE.trading_day != today:
+        STATE.trades_today = 0  # Reset counter
+        STATE.consecutive_losses = 0  # Fresh start
+        STATE.last_trade_bar = None  # Clear cooldown
+
+
+4. Slippage Monitoring
+# Real-time degradation detection
+if median_slippage > expected + MAX_DRIFT:
+    STATE.risk_throttle = TRUE
+    # Prevents trading in poor execution conditions
+
+
+5. Crash Recovery
+# System restarts mid-day:
+STATE_STORE = StateStore(STATE_FILE_PATH)
+STATE = STATE_STORE.state  # Load from disk
+
+
+# Knows:
+# • How many trades taken today
+# • When last trade occurred
+# • If trading is disabled
+# • Current consecutive losses
+
+
+# NO DATA LOSS
+
+
+________________
+
+
+Logging & Observability
+Log Levels
+Level
+	Use Case
+	Example
+	INFO
+	Normal operations
+	"Bar 123: close=1.09500"
+	WARNING
+	Recoverable issues
+	"Failed to get bar, retrying..."
+	ERROR
+	Unexpected problems
+	"MT5 connection lost"
+	CRITICAL
+	System shutdown needed
+	"Multiple execution failures"
+	What Gets Logged
+# EVERY ITERATION:
+logging.info(f"Bar {index}: close={close}, atr={atr}")
+logging.info(f"Regime: {vol}/{structure}, allowed={allowed}")
+
+
+# WHEN SIGNAL GENERATED:
+logging.info(f"Signal: {dir} @ {price}, SL={sl}, TP={tp}")
+
+
+# WHEN TRADE BLOCKED:
+logging.info("Psychology filter blocked trade")
+logging.info("Cost filter blocked trade")
+logging.info("Risk management blocked trade")
+
+
+# WHEN TRADE EXECUTED:
+logging.info(f"✅ Trade executed: {dir} {size} lots")
+
+
+# WHEN ERRORS OCCUR:
+logging.error(f"Failed to execute: {error_message}")
+logging.exception(f"Critical error: {e}")  # Includes traceback
+
+
+# WHEN ALERTS TRIGGERED:
+logging.warning("Slippage drift detected")
+logging.critical("TRADING DISABLED")
+
+
+Log File Management
+# Configuration (in main.py)
+logging.basicConfig(
+    filename="logs/trading.log",
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
+
+
+# Output format:
+# 2025-01-15 14:30:45 [INFO] Bar 123: close=1.09500, atr=0.00015
+# 2025-01-15 14:31:45 [INFO] Regime: normal/trend, allowed=True
+# 2025-01-15 14:32:45 [INFO] Signal: BUY @ 1.09500, SL=1.09350, TP=1.09800
+
+
+________________
+
+
+<a name="deployment"></a>
+8. 🚀 Deployment & Operations
+Deployment Options
+Option 1: VPS Deployment (Recommended)
+┌────────────────────────────────────────────────┐
+│              VPS DEPLOYMENT                     │
+├────────────────────────────────────────────────┤
+│                                                │
+│  PLATFORM: Ubuntu 20.04 or Windows Server      │
+│  RAM: 2GB minimum                              │
+│  CPU: 1 core minimum                           │
+│  STORAGE: 10GB                                 │
+│  PROVIDER: AWS, DigitalOcean, Vultr, etc.      │
+│                                                │
+│  COST: $5-10/month                             │
+│  UPTIME: 99.9%                                 │
+│                                                │
+└────────────────────────────────────────────────┘
+
+
+ADVANTAGES:
+  ✓ 24/7 operation
+  ✓ No local computer needed
+  ✓ Reliable internet connection
+  ✓ Can survive local power outages
+  ✓ Professional setup
+
+
+DISADVANTAGES:
+  ✗ Monthly cost
+  ✗ Requires SSH/RDP knowledge
+  ✗ Initial setup complexity
+
+
+Option 2: Local Computer
+┌────────────────────────────────────────────────┐
+│           LOCAL COMPUTER DEPLOYMENT             │
+├────────────────────────────────────────────────┤
+│                                                │
+│  REQUIREMENTS:                                 │
+│  • Computer stays on 24/7                      │
+│  • Stable internet connection                  │
+│  • Windows or Linux                            │
+│  • MetaTrader 5 installed                      │
+│                                                │
+│  COST: $0 (uses existing hardware)             │
+│  UPTIME: Depends on local conditions           │
+│                                                │
+└────────────────────────────────────────────────┘
+
+
+ADVANTAGES:
+  ✓ No monthly costs
+  ✓ Easy to monitor
+  ✓ Direct access
+
+
+DISADVANTAGES:
+  ✗ Computer must stay on
+  ✗ Vulnerable to power outages
+  ✗ Tied to one location
+  ✗ Higher electricity cost
+
+
+________________
+
+
+Installation Steps (Ubuntu VPS)
+# STEP 1: Update system
+sudo apt update && sudo apt upgrade -y
+
+
+# STEP 2: Install Python 3.8+
+sudo apt install python3 python3-pip -y
+
+
+# STEP 3: Install Wine (for MT5 on Linux)
+sudo dpkg --add-architecture i386
+wget -qO - https://dl.winehq.org/wine-builds/winehq.key | sudo apt-key add -
+sudo add-apt-repository 'deb https://dl.winehq.org/wine-builds/ubuntu/ focal main'
+sudo apt update
+sudo apt install --install-recommends winehq-stable -y
+
+
+# STEP 4: Install MetaTrader 5
+wget https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe
+wine mt5setup.exe  # Follow GUI installer
+
+
+# STEP 5: Install Python dependencies
+pip3 install MetaTrader5 numpy
+
+
+# STEP 6: Upload trading system files
+# Use SCP or SFTP to copy files to VPS
+
+
+# STEP 7: Create required directories
+mkdir -p logs state
+
+
+# STEP 8: Configure MT5
+# 1. Login to demo account in MT5
+# 2. Enable algo trading: Tools → Options → Expert Advisors
+# 3. Keep MT5 running
+
+
+# STEP 9: Test the system
+python3 main.py
+
+
+# STEP 10: Set up as systemd service (autostart)
+sudo nano /etc/systemd/system/trading_bot.service
+
+
+Systemd Service Configuration
+[Unit]
+Description=FX Trading Bot
+After=network.target
+
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/trading_system
+ExecStart=/usr/bin/python3 /home/ubuntu/trading_system/main.py
+Restart=always
+RestartSec=10
+
+
+[Install]
+WantedBy=multi-user.target
+
+
+# Enable and start service
+sudo systemctl enable trading_bot
+sudo systemctl start trading_bot
+
+
+# Check status
+sudo systemctl status trading_bot
+
+
+# View logs
+sudo journalctl -u trading_bot -f
+
+
+________________
+
+
+Monitoring & Maintenance
+Daily Checks
+┌────────────────────────────────────────────────┐
+│              DAILY CHECKLIST                    │
+├────────────────────────────────────────────────┤
+│                                                │
+│  [ ] Check MT5 connection status               │
+│  [ ] Review logs/trading.log (last 24h)        │
+│  [ ] Verify state/trading_state.json           │
+│  [ ] Check open positions in MT5               │
+│  [ ] Confirm trades_today < MAX_TRADES_PER_DAY │
+│  [ ] Look for any ALERT messages               │
+│                                                │
+└────────────────────────────────────────────────┘
+
+
+TIME REQUIRED: 5-10 minutes
+FREQUENCY: Once per day (morning routine)
+
+
+Weekly Analysis
+┌────────────────────────────────────────────────┐
+│             WEEKLY ANALYSIS                     │
+├────────────────────────────────────────────────┤
+│                                                │
+│  1. Export MT5 trade history                   │
+│  2. Calculate performance metrics:             │
+│     • Total trades                             │
+│     • Win rate                                 │
+│     • Average win vs. average loss             │
+│     • Profit factor                            │
+│     • Maximum drawdown                         │
+│  3. Review regime distribution                 │
+│  4. Check slippage trends                      │
+│  5. Identify improvements                      │
+│                                                │
+└────────────────────────────────────────────────┘
+
+
+TIME REQUIRED: 30-60 minutes
+FREQUENCY: Sunday evening
+
+
+Monthly Maintenance
+┌────────────────────────────────────────────────┐
+│            MONTHLY MAINTENANCE                  │
+├────────────────────────────────────────────────┤
+│                                                │
+│  [ ] Rotate log files (archive old logs)       │
+│  [ ] Review config.py parameters               │
+│  [ ] Update dependencies if needed             │
+│  [ ] Test backup/recovery procedure            │
+│  [ ] Verify VPS billing/renewal                │
+│  [ ] Check system resource usage               │
+│                                                │
+└────────────────────────────────────────────────┘
+
+
+TIME REQUIRED: 1-2 hours
+FREQUENCY: First Sunday of month
+
+
+________________
+
+
+<a name="outcomes"></a>
+9. 📈 Performance & Outcomes
+Expected Outcomes
+At $100 Capital (Conservative)
+┌────────────────────────────────────────────────┐
+│         EXPECTED PERFORMANCE ($100)             │
+├────────────────────────────────────────────────┤
+│                                                │
+│  RISK PER TRADE:     $0.50 (0.5%)              │
+│  TYPICAL POSITION:   0.01-0.02 lots            │
+│  TRADES PER DAY:     1-3 (max 5)               │
+│  TRADES PER MONTH:   20-60                     │
+│                                                │
+│  EXPECTED WIN RATE:  50-55%                    │
+│  AVG WIN:            $1.50-$3.00               │
+│  AVG LOSS:           $0.50-$1.00               │
+│  PROFIT FACTOR:      1.5-2.0                   │
+│                                                │
+│  MONTHLY RETURN:     $10-$30 (10-30%)          │
+│  MONTHLY DRAWDOWN:   $5-$15 (5-15%)            │
+│                                                │
+│  TIME TO $200:       3-10 months               │
+│  TIME TO $1,000:     24-36 months              │
+│                                                │
+└────────────────────────────────────────────────┘
+
+
+KEY INSIGHT: Small account = slow growth
+            But SURVIVAL = eventual success
+
+
+At $1,000 Capital (More Comfortable)
+┌────────────────────────────────────────────────┐
+│        EXPECTED PERFORMANCE ($1,000)            │
+├────────────────────────────────────────────────┤
+│                                                │
+│  RISK PER TRADE:     $5.00 (0.5%)              │
+│  TYPICAL POSITION:   0.02-0.05 lots            │
+│  TRADES PER DAY:     1-3 (max 5)               │
+│  TRADES PER MONTH:   20-60                     │
+│                                                │
+│  EXPECTED WIN RATE:  50-55%                    │
+│  AVG WIN:            $15-$30                   │
+│  AVG LOSS:           $5-$10                    │
+│  PROFIT FACTOR:      1.5-2.0                   │
+│                                                │
+│  MONTHLY RETURN:     $100-$300 (10-30%)        │
+│  MONTHLY DRAWDOWN:   $50-$150 (5-15%)          │
+│                                                │
+│  TIME TO $2,000:     3-10 months               │
+│  TIME TO $10,000:    24-36 months              │
+│                                                │
+└────────────────────────────────────────────────┘
+
+
+KEY INSIGHT: Larger account = more comfortable
+            Position sizes less constrained
+
+
+________________
+
+
+Success Metrics
+System Health Metrics
+Metric
+	Good
+	Acceptable
+	Concerning
+	Slippage
+	< 2 pips
+	2-4 pips
+	> 4 pips
+	Fill rate
+	> 95%
+	90-95%
+	< 90%
+	Execution failures
+	0-1/day
+	2-3/day
+	> 3/day
+	System uptime
+	> 99%
+	95-99%
+	< 95%
+	Trading Performance Metrics
+Metric
+	Good
+	Acceptable
+	Concerning
+	Win rate
+	> 55%
+	50-55%
+	< 50%
+	Profit factor
+	> 2.0
+	1.5-2.0
+	< 1.5
+	Max drawdown
+	< 10%
+	10-15%
+	> 15%
+	Sharpe ratio
+	> 1.5
+	1.0-1.5
+	< 1.0
+	________________
+
+
+Common Issues & Solutions
+Issue 1: No Trades for Days
+SYMPTOM: System runs but no trades execute
+
+
+POSSIBLE CAUSES:
+  1. Regime always "compression" or "expansion + range"
+  2. Psychology filters too restrictive
+  3. Cost filters blocking everything
+  4. Strategy not detecting setups
+
+
+DIAGNOSIS:
+  • Check logs for regime classification
+  • Review spread values in logs
+  • Confirm indicators are calculating
+  • Check if signals are being generated
+
+
+SOLUTION:
+  • If compression: Wait (normal market condition)
+  • If cost filtering: Check broker spread
+  • If no signals: Review strategy logic
+  • If psychology: Check trade counters
+
+
+Issue 2: Excessive Slippage
+SYMPTOM: Slippage > 5 pips consistently
+
+
+POSSIBLE CAUSES:
+  1. Low liquidity times (Asian session)
+  2. News events causing volatility
+  3. Broker execution issues
+  4. Network latency (VPS → Broker)
+
+
+DIAGNOSIS:
+  • Check trade execution times
+  • Compare to broker's typical spread
+  • Test from different VPS location
+  • Review broker's execution stats
+
+
+SOLUTION:
+  • Choose VPS near broker server
+  • Avoid trading during illiquid hours
+  • Consider changing broker
+  • Tighten MAX_SPREAD_MULTIPLIER
+
+
+Issue 3: System Disabled Automatically
+SYMPTOM: trading_disabled = TRUE in state file
+
+
+POSSIBLE CAUSES:
+  1. Hit 5 consecutive losses
+  2. 3+ execution failures
+  3. Slippage drift detected
+  4. Manual intervention
+
+
+DIAGNOSIS:
+  • Check logs for trigger event
+  • Review recent trade history
+  • Examine error messages
+  • Check MT5 connection
+
+
+SOLUTION:
+  • Investigate root cause
+  • Fix underlying issue
+  • Manually re-enable:
+    - Edit state file: trading_disabled = false
+    - Or restart system (resets state)
+  • Monitor closely after re-enabling
+
+
+________________
+
+
+Scaling Strategy
+Phase 1: $100 → $500 (Validation)
+GOAL: Prove system works in live conditions
+
+
+FOCUS:
+  • Survival > profits
+  • Monitor execution quality
+  • Validate backtest assumptions
+  • Build confidence in system
+
+
+DURATION: 3-6 months
+
+
+EXIT CRITERIA:
+  • Positive expectancy confirmed
+  • Slippage within expectations
+  • No major operational issues
+  • Confident in system logic
+
+
+Phase 2: $500 → $2,000 (Growth)
+GOAL: Compound returns while maintaining discipline
+
+
+FOCUS:
+  • Maintain same risk % (0.5%)
+  • Position sizes scale naturally
+  • Continue monitoring health
+  • Optimize parameters if needed
+
+
+DURATION: 6-12 months
+
+
+EXIT CRITERIA:
+  • Consistent profitability
+  • Comfortable with position sizes
+  • System running smoothly
+
+
+Phase 3: $2,000 → $10,000 (Expansion)
+GOAL: Scale to meaningful capital
+
+
+CONSIDERATIONS:
+  • May need to add strategies
+  • Could trade multiple symbols
+  • Consider lower risk % (0.3-0.4%)
+  • Professional-grade infrastructure
+
+
+DURATION: 12-24 months
+
+
+EXIT CRITERIA:
+  • Living income potential reached
+  • Multiple strategies deployed
+  • Robust operational procedures
+
+
+________________
+
+
+Long-Term Vision
+┌────────────────────────────────────────────────┐
+│            LONG-TERM ROADMAP                    │
+├────────────────────────────────────────────────┤
+│                                                │
+│  YEAR 1: Validation & Survival                 │
+│    • Prove edge exists                         │
+│    • Survive first drawdowns                   │
+│    • Build operational discipline              │
+│                                                │
+│  YEAR 2: Optimization & Growth                 │
+│    • Add second strategy                       │
+│    • Optimize parameters                       │
+│    • Scale capital to $5K-$10K                 │
+│                                                │
+│  YEAR 3: Diversification                       │
+│    • Trade multiple pairs                      │
+│    • Multiple timeframes                       │
+│    • Professional infrastructure               │
+│    • Capital at $20K-$50K                      │
+│                                                │
+│  YEAR 4+: Sustainability                       │
+│    • Living income potential                   │
+│    • Robust multi-strategy portfolio           │
+│    • Minimal manual intervention               │
+│    • Focus on risk management                  │
+│                                                │
+└────────────────────────────────────────────────┘
+
+
+________________
+
+
+🎯 Conclusion
+This trading system represents professional-grade algorithmic trading architecture, adapted for retail traders with small accounts.
+Key Takeaways
+         1. Architecture Matters: The system survives because of its structure, not its strategy
+         2. Discipline is Code: Behavioral rules enforced systematically
+         3. Fail-Closed Design: Unknown = safe = no trade
+         4. Hierarchical Veto: Multiple layers of protection
+         5. Survival > Optimization: Live to trade another day
+Success Formula
+EDGE = Strategy + Execution Quality - Costs - Behavioral Leaks
+
+
+WHERE:
+  Strategy: Modest positive expectancy (50-55% win rate)
+  Execution: Minimized slippage, good fills
+  Costs: Spread/slippage management
+  Behavioral Leaks: ZERO (enforced by code)
+
+
+RESULT: Sustainable, scalable trading system
+
+
+________________
+
+
+Remember: The market doesn't care about your strategy. It cares about your execution, your discipline, and your survival.
+This system is designed to make you survive first, profit second. Because if you survive long enough, profits become inevitable.
+Good luck, and trade safe! 🚀📈</parameter>

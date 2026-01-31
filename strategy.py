@@ -21,18 +21,26 @@ def evaluate_strategy(bar, regime_context):
     print("Regime Allowed")
 
     structure = regime_context['structure']
-    print(f"Market Structure: {structure}")
+    bias = regime_context.get('strategy_bias')  # NEW: refined regime output
+    print(f"Market Structure: {structure}, Strategy Bias: {bias}")
     signal = None
 
-    # 2. SELECT STRATEGY BASED ON STRUCTURE
-    if structure == "trend":
-        print("Evaluating Trend Following Strategy")
-        signal = get_trend_following_signal(bar)
-    elif structure == "range":
-        print("Evaluating Mean Reversion Strategy")
+    # 2. SELECT STRATEGY BASED ON REGIME BIAS (with fallback to structure)
+    if bias == "trend":
+        print("Evaluating Trend Following Strategy (bias=trend)")
+        signal = get_trend_following_signal(bar, regime_context)
+    elif bias == "mean_reversion":
+        print("Evaluating Mean Reversion Strategy (bias=mean_reversion)")
         signal = get_mean_reversion_signal(bar)
+    else:
+        # Fallback to legacy behavior if no bias provided
+        if structure == "trend":
+            print("Evaluating Trend Following Strategy (structure=trend)")
+            signal = get_trend_following_signal(bar, regime_context)
+        elif structure == "range":
+            print("Evaluating Mean Reversion Strategy (structure=range)")
+            signal = get_mean_reversion_signal(bar)
 
-    
     # 3. APPLY UNIVERSAL FILTERS
     if signal:
         # Ref: Page 16 - "Avoid extended candles"
@@ -40,13 +48,21 @@ def evaluate_strategy(bar, regime_context):
         if bar['range'] > (bar['atr'] * EXTENDED_MULTIPLIER):
             print("Extended candle vetoed. Range (", bar['range'], ") more than ATR multipler (", bar['atr'], ").")
             return None
-       
+
+        # Attach regime metadata if not already on the signal
+        if "risk_multiplier" not in signal:
+            signal["risk_multiplier"] = regime_context.get("risk_multiplier", 1.0)
+        signal.setdefault("htf_trend", regime_context.get("htf_trend"))
+        signal.setdefault("regime_label", regime_context.get("regime_label"))
+
     return signal
 
-def get_trend_following_signal(bar):
+def get_trend_following_signal(bar, regime_context):
     """
     Strategy 1: Trend Following (Pullbacks)
     Ref: Page 31
+
+    Now incorporates Higher Timeframe (HTF) trend bias into risk_multiplier.
     """
     
     direction = None
@@ -59,36 +75,70 @@ def get_trend_following_signal(bar):
         # Wait for pullback: Price near EMA(20)
         # Logic: If low is below EMA_FAST but close is above (rejection)
         if bar['low'] <= bar['ema_fast'] and bar['close'] > bar['ema_fast']:
-            print("Buy Allowed:low ( ",bar['low'],")is below EMA_FAST (",bar['ema_fast'],") and close (",bar['close'],") is above EMA_FAST(",bar['ema_fast'],").")
+            print("Buy Allowed: low (", bar['low'], ") is below EMA_FAST (", bar['ema_fast'], ") and close (", bar['close'], ") is above EMA_FAST (", bar['ema_fast'], ").")
             direction = "BUY"
         elif bar['low'] > bar['ema_fast'] and bar['close'] > bar['ema_fast']:
-            print(" Buy Not Allowed: Low (",bar['low'],")is above EMA_FAST (",bar['ema_fast'],").")
-        elif bar['low'] <= bar['ema_fast'] and bar['close'] < bar['ema_fast']:
-            print(" Buy Not Allowed: Close (",bar['close'],") is below EMA_FAST(",bar['ema_fast'],").")
-        elif not bar['low'] <= bar['ema_fast'] and not bar['close'] > bar['ema_fast']:
-            print(" Buy Not Allowed: Low (",bar['low'],") is above EMA_FAST (",bar['ema_fast'],") and Close (",bar['close'],") is below EMA_FAST(",bar['ema_fast'],").")
+            print(" Buy Not Allowed: low (", bar['low'], ") and close (", bar['close'], ") are above EMA_FAST (", bar['ema_fast'], ").")
+        elif bar['low'] <= bar['ema_fast'] and not bar['close'] > bar['ema_fast']:
+            print(" Buy Not Allowed: low (", bar['low'], ") is below EMA_FAST (", bar['ema_fast'], ") and close (", bar['close'], ") is below EMA_FAST (", bar['ema_fast'], ").")
+        elif bar['low'] > bar['ema_fast'] and not bar['close'] > bar['ema_fast']:
+            print(" Buy Not Allowed: low (", bar['low'], ") is above EMA_FAST (", bar['ema_fast'], ") and close (", bar['close'], ") is below EMA_FAST (", bar['ema_fast'], ").")
 
-
-
-    # Trend is DOWN
+    # EMA(20) < EMA(50) -> Trend is DOWN
     elif bar['ema_fast'] < bar['ema_slow']:
         print("Trend is DOWN")
-        # Wait for pullback to EMA_FAST
+        # Wait for pullback: Price near EMA(20)
+        # Logic: If high is above EMA_FAST but close is below (rejection)
         if bar['high'] >= bar['ema_fast'] and bar['close'] < bar['ema_fast']:
-            print("High (",bar['high'],") is above EMA_FAST (",bar['ema_fast'],") and close (",bar['close'],") is below EMA_FAST (",bar['ema_fast'],").")
+            print("Sell Allowed: High (", bar['high'], ") is above EMA_FAST (", bar['ema_fast'], ") and close (", bar['close'], ") is below EMA_FAST (", bar['ema_fast'], ").")
             direction = "SELL"
         elif not bar['high'] >= bar['ema_fast'] and bar['close'] < bar['ema_fast']:
-            print(" Sell Not Allowed: High (",bar['high'],")is below EMA_FAST (",bar['ema_fast'],").")
+            print(" Sell Not Allowed: High (", bar['high'], ") is below EMA_FAST (", bar['ema_fast'], ").")
         elif bar['high'] >= bar['ema_fast'] and not bar['close'] < bar['ema_fast']:
-            print(" Sell Not Allowed: Close (",bar['close'],")is above EMA_FAST (",bar['ema_fast'],").")
+            print(" Sell Not Allowed: Close (", bar['close'], ") is above EMA_FAST (", bar['ema_fast'], ").")
         elif not bar['high'] >= bar['ema_fast'] and not bar['close'] < bar['ema_fast']:
-            print(" Sell Not Allowed: High (",bar['high'],") is below EMA_FAST (",bar['ema_fast'],") and Close (",bar['close'],") is above EMA_FAST (",bar['ema_fast'],").")
+            print(" Sell Not Allowed: High (", bar['high'], ") is below EMA_FAST (", bar['ema_fast'], ") and close (", bar['close'], ") is above EMA_FAST (", bar['ema_fast'], ").")
 
-    if direction:
-        return construct_signal_dict(direction, bar, strategy)
-    else:
+    if not direction:
         print("No direction for Trend Strategy.")
-    return None
+        return None
+
+    # --- Build base signal (price/SL/TP) ---
+    signal = construct_signal_dict(direction, bar, strategy)
+    if not signal:
+        return None
+
+    # --- Higher Timeframe (HTF) Bias Integration into risk_multiplier ---
+    htf_trend = regime_context.get("htf_trend", "flat")
+    base_mult = regime_context.get("risk_multiplier", 1.0)
+
+    # Direction alignment with HTF trend
+    aligned = (
+        (direction == "BUY" and htf_trend == "up") or
+        (direction == "SELL" and htf_trend == "down")
+    )
+
+    if aligned:
+        htf_mult = 1.0          # full risk when aligned
+    elif htf_trend == "flat":
+        htf_mult = 0.5          # reduced risk when HTF is flat
+    else:
+        htf_mult = 0.0          # counter-trend -> no trade
+
+    final_mult = base_mult * htf_mult
+
+    if final_mult <= 0.0:
+        print(f"Trend signal vetoed by HTF bias: direction={direction}, htf_trend={htf_trend}")
+        return None
+
+    # Attach multipliers and regime info to the signal
+    signal["risk_multiplier"] = final_mult
+    signal["htf_trend"] = htf_trend
+    signal["regime_label"] = regime_context.get("regime_label")
+
+    return signal
+
+
 
 def get_mean_reversion_signal(bar):
     """
